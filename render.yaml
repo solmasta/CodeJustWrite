@@ -1,0 +1,24 @@
+# Render.com Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: push this repo to GitHub, then in Render click New > Blueprint
+# and point it at the repo. Render reads this file automatically.
+services:
+  - type: web
+    name: codejustwrite-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    envVars:
+      - key: CJW_AUTH_TOKEN
+        sync: false # set to a long random secret in the Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPINFRA_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: CJW_DEFAULT_PROVIDER
+        value: openai
+      - key: CJW_SESSION_TTL_MIN
+        value: "120"
+      - key: CJW_MAX_SESSIONS
+        value: "20"
