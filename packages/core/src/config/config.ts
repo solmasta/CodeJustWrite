@@ -1,8 +1,3 @@
-import { config as loadDotenv } from "dotenv";
-import path from "node:path";
-
-loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
-
 export type ProviderName = "openai" | "deepinfra";
 
 export interface CjwConfig {

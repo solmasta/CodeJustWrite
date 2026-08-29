@@ -1,7 +1,11 @@
 #!/usr/bin/env node
+import { config as loadDotenv } from "dotenv";
+import path from "node:path";
 import { Command } from "commander";
-import { loadConfig } from "./config/config.js";
+import { loadConfig } from "@codejustwrite/core";
 import { runRepl } from "./cli/repl.js";
+
+loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
 const program = new Command();
 

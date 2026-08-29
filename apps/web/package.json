@@ -1,0 +1,18 @@
+{
+  "name": "@codejustwrite/web",
+  "version": "0.1.0",
+  "description": "CodeJustWrite PWA — mobile-installable chat UI for the agent.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.9",
+    "vite-plugin-pwa": "^0.20.5"
+  }
+}

@@ -1,12 +1,16 @@
 import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import chalk from "chalk";
-import { Agent } from "../agent/agent.js";
-import { ProviderRegistry } from "../providers/registry.js";
-import { defaultModelFor, type CjwConfig, type ProviderName } from "../config/config.js";
-import { execSandboxed } from "../sandbox/exec.js";
-import { log } from "../utils/logger.js";
-import type { ToolContext } from "../agent/tools/index.js";
+import {
+  Agent,
+  ProviderRegistry,
+  defaultModelFor,
+  execSandboxed,
+  log,
+  type CjwConfig,
+  type ProviderName,
+  type ToolContext,
+} from "@codejustwrite/core";
 
 const HELP_TEXT = `
 Slash commands:
