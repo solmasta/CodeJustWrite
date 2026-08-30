@@ -1,166 +1,143 @@
-import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { Agent } from "@codejustwrite/core";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+import { readFileSync } from "fs";
+import { Agent, CjwConfig } from "@codejustwrite/core";
 import { SessionManager } from "./session.js";
 import { requireAuth, checkWsToken } from "./auth.js";
 import { withGithubToken, redactSecrets } from "./secrets.js";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import { totalmem, freemem } from "os";
-import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const PORT = process.env.PORT || 3001;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 const AUTH_TOKEN = process.env.AUTH_TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WORKSPACES_DIR = process.env.WORKSPACES_DIR || "/tmp/cjw-workspaces";
-const SESSION_TTL_MINUTES = parseInt(process.env.SESSION_TTL_MINUTES || "60", 10);
+const SESSION_TTL_MINUTES = parseInt(process.env.SESSION_TTL_MINUTES || "30", 10);
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "50", 10);
 
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const MAX_REQUESTS_PER_WINDOW = 60;
-const MAX_WS_MESSAGES_PER_MINUTE = 100;
-const MAX_WS_MESSAGE_SIZE = 100 * 1024;
-
-const requestCounts = new Map<string, { count: number; resetTime: number }>>();
-
-function getClientIp(req: Request): string {
-  return (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "unknown";
-}
-
-function checkRateLimit(clientIp: string): boolean {
-  const now = Date.now();
-  const windowStart = Math.floor(now / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS;
-  
-  const entry = requestCounts.get(clientIp);
-  if (!entry || entry.resetTime < windowStart) {
-    requestCounts.set(clientIp, { count: 1, resetTime: windowStart + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  
-  if (entry.count >= MAX_REQUESTS_PER_WINDOW) {
-    return false;
-  }
-  
-  entry.count++;
-  return true;
-}
-
-function cleanupRateLimits(): void {
-  const now = Date.now();
-  for (const [ip, entry] of requestCounts.entries()) {
-    if (entry.resetTime < now) {
-      requestCounts.delete(ip);
-    }
-  }
-}
-
-setInterval(cleanupRateLimits, 5 * 60 * 1000);
-
-const config = {
-  workspacesDir: WORKSPACES_DIR,
-  defaultBranch: "main",
-  shellTimeoutSec: 30,
-  maxOutputLines: 1000,
-  providers: [],
-  selectedProvider: undefined,
-  selectedModel: undefined,
+const config: CjwConfig = {
+  modelProvider: process.env.MODEL_PROVIDER as any || "openai",
+  modelName: process.env.MODEL_NAME || "gpt-4",
+  apiKey: process.env.API_KEY || "",
+  temperature: parseFloat(process.env.TEMPERATURE || "0.7"),
+  maxTokens: parseInt(process.env.MAX_TOKENS || "4000", 10),
+  shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || "30", 10),
+  testTimeoutSec: parseInt(process.env.TEST_TIMEOUT_SEC || "60", 10),
 };
 
+const server = createServer();
+const wss = new WebSocketServer({ server });
+
+const agent = new Agent(config);
 const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
 
-const app = express();
-app.use(express.json({ limit: "100kb" }));
+server.on("request", async (req, res) => {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const pathname = url.pathname;
 
-app.use((req, res, next) => {
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  next();
-});
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-app.use((req, res, next) => {
-  const clientIp = getClientIp(req);
-  if (!checkRateLimit(clientIp)) {
-    res.status(429).json({ error: "Rate limit exceeded" });
-    return;
-  }
-  next();
-});
-
-app.get("/api/health", (_req, res) => {
-  const memoryUsage = process.memoryUsage();
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    checks: {
-      github: { status: "ok", latency: 0 },
-      memory: { status: "ok", latency: memoryUsage.heapUsed / 1024 / 1024 },
-      sessions: { status: "ok", latency: sessions.size }
-    },
-    uptime: process.uptime()
-  });
-});
-
-app.post("/api/session/start", requireAuth(AUTH_TOKEN), async (req, res) => {
-  const { repoUrl, branch } = req.body;
-  if (!repoUrl) {
-    res.status(400).json({ error: "repoUrl is required" });
+  if (req.method === "OPTIONS") {
+    res.writeHead(200);
+    res.end();
     return;
   }
 
-  try {
-    const session = await sessions.createSession(repoUrl, branch || "main");
-    res.json({ sessionId: session.id, repoUrl, branch: session.branch });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-app.post("/api/session/stop", requireAuth(AUTH_TOKEN), async (req, res) => {
-  const { sessionId } = req.body;
-  if (!sessionId) {
-    res.status(400).json({ error: "sessionId is required" });
+  // Health check
+  if (pathname === "/api/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", timestamp: new Date().toISOString() }));
     return;
   }
 
-  try {
-    await sessions.disposeSession(sessionId);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-app.get("/api/repos", requireAuth(AUTH_TOKEN), async (_req, res) => {
-  if (!GITHUB_TOKEN) {
-    res.status(503).json({ error: "GitHub token not configured" });
-    return;
+  // Auth middleware for protected routes
+  if (pathname.startsWith("/api/") && pathname !== "/api/health") {
+    const authResult = requireAuth(AUTH_TOKEN, req);
+    if (authResult.error) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: authResult.error }));
+      return;
+    }
   }
 
-  try {
-    const repos = await withGithubToken(GITHUB_TOKEN, async (token) => {
-      const response = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100", {
-        headers: { Authorization: `Bearer ${token}` }
+  // List user's GitHub repos
+  if (pathname === "/api/repos") {
+    try {
+      const repos = await withGithubToken(GITHUB_TOKEN, async (token) => {
+        const response = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100", {
+          headers: { Authorization: `token ${token}` },
+        });
+        if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
+        return await response.json();
       });
-      if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
-      return await response.json();
-    });
-    res.json(repos);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(repos));
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(error) }));
+    }
+    return;
   }
+
+  // Start session
+  if (pathname === "/api/session" && req.method === "POST") {
+    const body = await new Promise<string>((resolve) => {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => resolve(data));
+    });
+
+    try {
+      const { repoUrl, branch, provider, model, apiKey } = JSON.parse(body);
+      const session = sessions.createSession(repoUrl, branch, { provider, model, apiKey });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ sessionId: session.id, token: session.token }));
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(error) }));
+    }
+    return;
+  }
+
+  // Get session
+  if (pathname.startsWith("/api/session/") && req.method === "GET") {
+    const sessionId = pathname.split("/")[3];
+    const session = sessions.getSession(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(session));
+    return;
+  }
+
+  // Static files (web app)
+  if (pathname === "/" || pathname === "/index.html") {
+    try {
+      const html = readFileSync(join(__dirname, "../public/index.html"), "utf-8");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    } catch {
+      res.writeHead(404);
+      res.end("Not found");
+    }
+    return;
+  }
+
+  res.writeHead(404);
+  res.end("Not found");
 });
 
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
-
-wss.on("connection", (ws, req) => {
-  const url = new URL(req.url || "", `http://localhost`);
+wss.on("connection", (ws: WebSocket, req) => {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const sessionId = url.searchParams.get("sessionId");
   const token = url.searchParams.get("token");
 
@@ -169,67 +146,35 @@ wss.on("connection", (ws, req) => {
     return;
   }
 
-  if (!checkWsToken(AUTH_TOKEN, token)) {
-    ws.close(1008, "Invalid token");
+  const authResult = checkWsToken(AUTH_TOKEN, token);
+  if (authResult.error) {
+    ws.close(1008, authResult.error);
     return;
   }
 
-  const session = sessions.get(sessionId);
+  const session = sessions.getSession(sessionId);
   if (!session) {
-    ws.close(1008, "Session not found");
+    ws.close(1008, "Invalid session");
     return;
   }
-
-  let messageCount = 0;
-  let lastMessageTime = Date.now();
 
   ws.on("message", async (data) => {
-    const now = Date.now();
-    if (now - lastMessageTime > 60000) {
-      messageCount = 0;
-      lastMessageTime = now;
-    }
-
-    if (++messageCount > MAX_WS_MESSAGES_PER_MINUTE) {
-      ws.close(1008, "Rate limit exceeded");
-      return;
-    }
-
-    if (data.length > MAX_WS_MESSAGE_SIZE) {
-      ws.close(1009, "Message too large");
-      return;
-    }
-
     try {
-      const message = JSON.parse(data.toString());
-      if (message.type === "chat" && message.text) {
-        const agent = new Agent(session.id, config);
-        const response = await agent.chat(message.text);
-        ws.send(JSON.stringify({ type: "assistant", text: response }));
-      }
-    } catch (err) {
-      ws.send(JSON.stringify({ type: "error", error: redactSecrets(String(err)) }));
+      const { message } = JSON.parse(data.toString());
+      const result = await agent.run(message, {
+        repoRoot: session.workspacePath,
+        config: session.config,
+      });
+      ws.send(JSON.stringify({ type: "response", data: redactSecrets(result) }));
+    } catch (error) {
+      ws.send(JSON.stringify({ type: "error", error: String(error) }));
     }
   });
 
   ws.on("close", () => {
-    console.log(`WebSocket closed for session: ${sessionId}`);
+    sessions.disposeSession(sessionId);
   });
-
-  ws.send(JSON.stringify({ type: "connected", sessionId }));
 });
-
-const gracefulShutdown = () => {
-  console.log("Shutting down gracefully...");
-  wss.clients.forEach((client) => client.close());
-  server.close(() => {
-    console.log("Server closed");
-    process.exit(0);
-  });
-};
-
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
