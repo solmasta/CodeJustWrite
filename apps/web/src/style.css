@@ -10,6 +10,8 @@
   --accent-dim: #0e7490;
   --danger: #f87171;
   --success: #4ade80;
+  --warning: #fbbf24;
+  --info: #60a5fa;
   --radius: 14px;
 }
 
@@ -67,6 +69,68 @@ body {
   cursor: pointer;
 }
 
+/* Connection status */
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.connection-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.connection-status.connecting {
+  background: rgba(96, 165, 250, 0.2);
+  color: var(--info);
+}
+
+.connection-status.connecting::before {
+  background: var(--info);
+  animation: pulse 1.5s infinite;
+}
+
+.connection-status.connected {
+  background: rgba(74, 222, 128, 0.2);
+  color: var(--success);
+}
+
+.connection-status.connected::before {
+  background: var(--success);
+}
+
+.connection-status.disconnected {
+  background: rgba(248, 113, 113, 0.2);
+  color: var(--danger);
+}
+
+.connection-status.disconnected::before {
+  background: var(--danger);
+}
+
+.connection-status.reconnecting {
+  background: rgba(251, 191, 36, 0.2);
+  color: var(--warning);
+}
+
+.connection-status.reconnecting::before {
+  background: var(--warning);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -84,6 +148,12 @@ body {
   word-wrap: break-word;
   font-size: 14.5px;
   line-height: 1.4;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .bubble.user {
@@ -120,6 +190,12 @@ body {
   background: var(--panel-2);
   font-size: 12.5px;
   overflow: hidden;
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 .tool-card .head {
@@ -168,6 +244,15 @@ body {
   border: 1px solid var(--border);
   font-size: 13px;
   cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.confirm-row button:hover {
+  transform: translateY(-1px);
+}
+
+.confirm-row button:active {
+  transform: translateY(0);
 }
 
 .confirm-row .approve {
@@ -175,9 +260,17 @@ body {
   color: #dcfce7;
 }
 
+.confirm-row .approve:hover {
+  background: #166534;
+}
+
 .confirm-row .deny {
   background: #450a0a;
   color: #fecaca;
+}
+
+.confirm-row .deny:hover {
+  background: #7f1d1d;
 }
 
 .composer {
@@ -198,6 +291,12 @@ body {
   padding: 10px 14px;
   font-size: 15px;
   max-height: 120px;
+  transition: border-color 0.15s;
+}
+
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
 }
 
 .composer button {
@@ -210,10 +309,22 @@ body {
   font-size: 18px;
   cursor: pointer;
   flex-shrink: 0;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.composer button:hover {
+  opacity: 0.9;
+  transform: scale(1.05);
+}
+
+.composer button:active {
+  transform: scale(0.95);
 }
 
 .composer button:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* Setup screen */
@@ -255,6 +366,13 @@ body {
   background: var(--panel-2);
   color: var(--text);
   font-size: 15px;
+  transition: border-color 0.15s;
+}
+
+.setup input:focus,
+.setup select:focus {
+  outline: none;
+  border-color: var(--accent-dim);
 }
 
 .setup .row {
@@ -275,6 +393,11 @@ body {
   font-weight: 600;
   font-size: 15px;
   cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.setup button.primary:hover {
+  opacity: 0.9;
 }
 
 .setup button.primary:disabled {
@@ -299,6 +422,11 @@ body {
   color: var(--text);
   font-size: 14px;
   cursor: pointer;
+  transition: background 0.15s;
+}
+
+.setup button.secondary:hover {
+  background: #1f2d44;
 }
 
 .setup button.text-btn {
@@ -309,6 +437,7 @@ body {
   font-size: 13px;
   cursor: pointer;
   text-decoration: underline;
+  transition: color 0.15s;
 }
 
 .setup button.text-btn:hover {
@@ -396,12 +525,17 @@ body {
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
 }
 
 .repo-item:hover {
   border-color: var(--accent-dim);
   background: #1f2d44;
+  transform: translateX(2px);
+}
+
+.repo-item:active {
+  transform: translateX(0);
 }
 
 .repo-item .name {
@@ -517,4 +651,60 @@ body {
   background: transparent;
   color: var(--danger);
   cursor: pointer;
+  transition: background 0.15s;
+}
+
+.danger-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* Loading spinner */
+.loading-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Utility classes */
+.hidden {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
