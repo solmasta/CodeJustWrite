@@ -65,7 +65,7 @@ export const runShellTool: ToolDefinition = {
     const error = validateCommand(command, ctx.repoRoot);
     
     if (error) {
-      return { error };
+      return `Error: ${error}`;
     }
 
     const result = await execSandboxed(command, {
