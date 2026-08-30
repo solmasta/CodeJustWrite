@@ -6,11 +6,132 @@
     <meta name="theme-color" content="#111827" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="description" content="AI-powered coding assistant with secure sandbox execution" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>CodeJustWrite</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Sign In Section -->
+      <section id="signInSection" class="setup sign-in">
+        <h2>Welcome to CodeJustWrite</h2>
+        <p>Sign in to start coding with AI assistance</p>
+        
+        <label>
+          Server URL
+          <input type="url" id="serverUrl" placeholder="https://your-server.com" />
+        </label>
+        
+        <label>
+          Auth Token (optional)
+          <input type="password" id="token" placeholder="Enter your token" />
+        </label>
+        
+        <p id="signInError" class="error hidden"></p>
+        
+        <div class="btn-row">
+          <button id="continueBtn" class="primary">Continue</button>
+        </div>
+      </section>
+      
+      <!-- Repository Selection Section -->
+      <section id="repoSection" class="setup repo-select hidden">
+        <h2>Select Repository</h2>
+        <p>Choose a repository to work with</p>
+        
+        <div class="search-container">
+          <input type="text" id="repoSearch" placeholder="Search repositories..." />
+        </div>
+        
+        <div id="recentReposSection" class="hidden">
+          <div class="section-header">Recent</div>
+          <div id="recentReposList" class="repo-list recent"></div>
+        </div>
+        
+        <div class="section-header">All Repositories</div>
+        <div id="repoList" class="repo-list"></div>
+        
+        <div class="row">
+          <label style="flex: 2;">
+            Repository URL
+            <input type="text" id="repoUrl" placeholder="https://github.com/user/repo" />
+          </label>
+          <label style="flex: 1;">
+            Branch
+            <input type="text" id="branch" placeholder="main" value="main" />
+          </label>
+        </div>
+        
+        <p id="repoError" class="error hidden"></p>
+        
+        <button id="startBtn" class="primary">Start Session</button>
+        <button id="browseBtn" class="text-btn small">Browse my repos</button>
+      </section>
+      
+      <!-- Chat Section -->
+      <section id="chatSection" class="hidden" style="flex: 1; display: flex; flex-direction: column;">
+        <div class="topbar">
+          <div>
+            <h1>CodeJustWrite</h1>
+            <div class="sub" id="repoSub">No repository selected</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
+            <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
+          </div>
+        </div>
+        
+        <div id="chatHistory" class="messages"></div>
+        
+        <div id="typingIndicator" class="hidden" style="padding: 0 14px; color: var(--text-dim); font-size: 13px;">
+          <span class="loading-spinner" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 8px;"></span>
+          AI is thinking...
+        </div>
+        
+        <div class="composer">
+          <textarea id="chatInput" placeholder="Ask the AI to help with your code..." rows="1"></textarea>
+          <button id="sendBtn" aria-label="Send">➜</button>
+        </div>
+      </section>
+      
+      <!-- Settings Modal -->
+      <dialog id="settingsModal" class="drawer">
+        <h2>Settings</h2>
+        
+        <label>
+          Provider
+          <select id="provider">
+            <option value="openai">OpenAI</option>
+            <option value="deepinfra">DeepInfra</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+        
+        <label>
+          Model
+          <input type="text" id="model" placeholder="gpt-4o" />
+        </label>
+        
+        <label>
+          API Key
+          <input type="password" id="apiKey" placeholder="sk-..." />
+        </label>
+        
+        <div class="toggle-row">
+          <span>Auto-approve tools</span>
+          <label class="switch">
+            <input type="checkbox" id="autoApprove" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <button id="saveSettings" class="primary">Save Settings</button>
+        <button id="closeSettings" class="secondary">Cancel</button>
+        
+        <button id="signOutBtn" class="danger-btn">Sign Out</button>
+      </dialog>
+    </div>
+    
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
