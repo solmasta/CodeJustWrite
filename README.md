@@ -3,7 +3,7 @@
 An AI-assisted coding agent. It reads and writes files in a git repository,
 runs the test suite in an isolated sandbox, drives a headless browser for UI
 checks, and manages git branches/commits/merges and GitHub pull requests —
-backed by either **OpenAI** or **DeepInfra** models.
+backed by **OpenAI**, **DeepInfra**, or **OpenRouter** models.
 
 It ships two ways to use the same agent:
 
@@ -32,7 +32,7 @@ npm run build:cli
 npm link --workspace=@codejustwrite/cli   # optional: exposes `cjw` globally
 
 cp apps/cli/.env.example apps/cli/.env
-# fill in OPENAI_API_KEY and/or DEEPINFRA_KEY
+# fill in OPENAI_API_KEY, DEEPINFRA_KEY, and/or OPENROUTER_KEY
 ```
 
 From inside any git repository:
@@ -49,7 +49,7 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model meta-llama
 
 ```
 /help                Show available commands
-/provider <name>     Switch LLM provider: openai | deepinfra
+/provider <name>     Switch LLM provider: openai | deepinfra | openrouter
 /model <name>         Switch model for the current provider
 /diff                 Show git diff of the working tree
 /status               Show git status
@@ -75,7 +75,7 @@ npm install
 npm run build:core
 npm run build:web      # apps/server serves this build
 cp apps/server/.env.example apps/server/.env
-# fill in OPENAI_API_KEY / DEEPINFRA_KEY and set CJW_AUTH_TOKEN to a
+# fill in OPENAI_API_KEY / DEEPINFRA_KEY / OPENROUTER_KEY and set CJW_AUTH_TOKEN to a
 # long random string — required for anything reachable off your machine
 npm run dev:server     # http://localhost:8787
 ```
@@ -93,7 +93,7 @@ Deploy the included `Dockerfile` to any container host. For
 2. In Render: **New → Blueprint**, point it at the repo (`render.yaml` is
    already set up).
 3. Fill in the secrets Render prompts for: `CJW_AUTH_TOKEN` (make up a long
-   random string), `OPENAI_API_KEY`/`DEEPINFRA_KEY`, and optionally
+   random string), `OPENAI_API_KEY`/`DEEPINFRA_KEY`/`OPENROUTER_KEY`, and optionally
    `GITHUB_TOKEN` for PR creation without the `gh` CLI.
 4. Once deployed, open the service's `https://…onrender.com` URL — that's
    both the API and the PWA.

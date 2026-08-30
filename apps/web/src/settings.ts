@@ -3,7 +3,7 @@ export interface Settings {
   token: string;
   repoUrl: string;
   branch: string;
-  provider: "openai" | "deepinfra";
+  provider: "openai" | "deepinfra" | "openrouter";
   model: string;
   autoApprove: boolean;
   sessionId: string;
