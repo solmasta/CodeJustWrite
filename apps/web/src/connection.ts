@@ -17,7 +17,7 @@ export function createConnection(
   onStatusChange: (status: "connecting" | "connected" | "disconnected" | "reconnecting") => void
 ): ConnectionManager {
   let socket: WebSocket | null = null;
-  let messageQueue: string[] = [];
+  const messageQueue: string[] = [];
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 10;

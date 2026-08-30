@@ -20,12 +20,13 @@ describe("execSandboxed", () => {
     expect(result.timedOut).toBe(true);
   }, 10_000);
 
-  it("truncates output past maxOutputBytes", async () => {
+  it("truncates output past maxOutputBytes and marks it as truncated", async () => {
     const result = await execSandboxed("yes x | head -c 1000000", {
       cwd: process.cwd(),
       timeoutSec: 5,
       maxOutputBytes: 100,
     });
-    expect(result.stdout.length).toBeLessThanOrEqual(100);
+    expect(result.stdout).toContain("(truncated)");
+    expect(Buffer.byteLength(result.stdout.replace(/\n…\(truncated\)$/, ""), "utf8")).toBeLessThanOrEqual(100);
   });
 });

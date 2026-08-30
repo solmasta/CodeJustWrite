@@ -125,7 +125,8 @@ export const gitCommitTool: ToolDefinition = {
       }
     }
 
-    // Commit with message via file to avoid shell escaping issues
+    // Passed as a single argv element (no shell involved), so multi-line
+    // messages and special characters need no escaping.
     const message = String(args.message).replace(/\r?\n/g, "\n");
     const result = await git(ctx.repoRoot, ["commit", "-m", message]);
     checkGitSuccess(result);

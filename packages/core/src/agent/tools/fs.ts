@@ -30,6 +30,7 @@ function validateFilename(name: string): void {
     throw new Error("Filename contains null bytes");
   }
   // Reject control characters
+  // eslint-disable-next-line no-control-regex -- intentional: scanning for control chars
   if (/[\x00-\x1f\x7f]/.test(name)) {
     throw new Error("Filename contains control characters");
   }
