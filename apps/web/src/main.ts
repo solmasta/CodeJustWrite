@@ -1,5 +1,17 @@
-import type { ChatMessage, ServerMessage, Settings } from "./types";
-import { debounce, loadSettings, persistSettings } from "./settings";
+import type { ServerMessage, Settings } from "./types";
+import { loadSettings, persistSettings } from "./settings";
+import { createConnection } from "./connection";
+import {
+  el,
+  apiFetch,
+  escapeHtml,
+  isValidUrl,
+  show,
+  hide,
+  text,
+  debounce,
+  formatDuration,
+} from "./utils";
 
 // --- DOM refs ---
 const signInSection = el<HTMLDivElement>("#signInSection");
@@ -22,6 +34,7 @@ const chatInput = el<HTMLInputElement>("#chatInput");
 const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
+const connectionStatus = el<HTMLDivElement>("#connectionStatus");
 
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
@@ -38,85 +51,41 @@ const recentReposSection = el<HTMLDivElement>("#recentReposSection");
 const recentReposList = el<HTMLDivElement>("#recentReposList");
 
 // --- State ---
-let socket: WebSocket | null = null;
+let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
 let settings: Settings = loadSettings();
-
-// --- Helpers ---
-function el<T extends HTMLElement>(sel: string): T {
-  const e = document.querySelector(sel);
-  if (!e) throw new Error(`Element not found: ${sel}`);
-  return e as T;
-}
-
-function apiBase(s: Settings): string {
-  return (s.serverUrl || location.origin).replace(/\/$/, "");
-}
-
-function wsBase(s: Settings): string {
-  const base = apiBase(s);
-  return base.replace(/^http/, "ws");
-}
-
-async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const base = apiBase(settings);
-  const url = `${base}${path}`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(init.headers as Record<string, string> || {}),
-  };
-  if (settings.token) headers["Authorization"] = `Bearer ${settings.token}`;
-  return fetch(url, { ...init, headers });
-}
-
-function show(el: HTMLElement) {
-  el.classList.remove("hidden");
-}
-
-function hide(el: HTMLElement) {
-  el.classList.add("hidden");
-}
-
-function text(el: HTMLElement, msg: string) {
-  el.textContent = msg;
-}
-
-// Validate URL format
-function isValidUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
+let isProcessing = false;
 
 // --- Sign In ---
 async function handleSignIn(): Promise<void> {
   const serverUrl = serverInput.value.trim();
   const token = tokenInput.value.trim();
   
-  // Validate URL format
   if (serverUrl && !isValidUrl(serverUrl)) {
     text(signInError, "Please enter a valid URL (http:// or https://)");
     show(signInError);
     return;
   }
   
-  persistSettings({ serverUrl, token });
-  settings = loadSettings();
-
+  continueBtn.disabled = true;
+  text(signInError, "Connecting...");
+  show(signInError);
+  
   try {
-    const res = await apiFetch("/api/auth/status");
+    const res = await apiFetch(settings, "/api/auth/status");
     if (!res.ok) {
       const err = await res.text().catch(() => "Unknown error");
       throw new Error(err || "Invalid token");
     }
+    persistSettings({ serverUrl, token });
+    settings = loadSettings();
     hide(signInError);
     showRepoSection();
   } catch (e) {
     text(signInError, String(e instanceof Error ? e.message : e));
     show(signInError);
+  } finally {
+    continueBtn.disabled = false;
   }
 }
 
@@ -151,7 +120,7 @@ async function loadRecentRepos(): Promise<void> {
 async function loadRepos(query: string): Promise<void> {
   repoList.innerHTML = "<div class='loading'>Loading repositories...</div>";
   try {
-    const res = await apiFetch(`/api/github/repos?q=${encodeURIComponent(query)}`);
+    const res = await apiFetch(settings, `/api/github/repos?q=${encodeURIComponent(query)}`);
     if (!res.ok) throw new Error("Failed to load repositories");
     const repos = await res.json() as Array<{ full_name: string; clone_url: string; default_branch?: string }>;
     repoList.innerHTML = "";
@@ -174,12 +143,6 @@ async function loadRepos(query: string): Promise<void> {
   }
 }
 
-function escapeHtml(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 const debouncedLoadRepos = debounce((q: string) => loadRepos(q), 300);
 
 // --- Chat ---
@@ -196,7 +159,7 @@ async function startSession(): Promise<void> {
   startBtn.textContent = "Starting...";
 
   try {
-    const res = await apiFetch("/api/session/start", {
+    const res = await apiFetch(settings, "/api/session/start", {
       method: "POST",
       body: JSON.stringify({ repoUrl: repo, branch }),
     });
@@ -212,7 +175,11 @@ async function startSession(): Promise<void> {
     const recent = settings.recentRepos || [];
     const existingIndex = recent.findIndex(r => r.clone_url === repo);
     if (existingIndex >= 0) recent.splice(existingIndex, 1);
-    recent.unshift({ full_name: repo.replace(/^.*github\.com\//, ""), clone_url: repo, default_branch: branch });
+    recent.unshift({ 
+      full_name: repo.replace(/^.*github\.com\//, ""), 
+      clone_url: repo, 
+      default_branch: branch 
+    });
     persistSettings({ recentRepos: recent.slice(0, 10) });
 
     hide(repoSection);
@@ -228,79 +195,68 @@ async function startSession(): Promise<void> {
 }
 
 function connectWebSocket(sessionId: string): void {
-  if (socket) {
-    try { socket.close(); } catch {}
-  }
+  connection?.close();
   
-  // Note: Browser WebSocket API doesn't support custom headers
-  // Token is passed in query param as fallback (exposed in logs/proxies)
-  // Server also accepts Authorization header for non-browser clients
-  const wsUrl = `${wsBase(settings)}/ws?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(settings.token)}`;
-  socket = new WebSocket(wsUrl);
-  
-  const messageQueue: string[] = [];
-  let isOpen = false;
-
-  socket.onopen = () => {
-    isOpen = true;
-    while (messageQueue.length) {
-      const msg = messageQueue.shift();
-      if (msg) socket.send(msg);
+  connection = createConnection(sessionId, settings, (status) => {
+    connectionStatus.className = `connection-status ${status}`;
+    connectionStatus.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    
+    if (status === "connected") {
+      typingIndicator.classList.add("hidden");
+    } else if (status === "disconnected") {
+      addBubble("system", "Connection lost. Attempting to reconnect...");
     }
+  });
+  
+  connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
+  connection.onOpen(() => {
+    // Clear any reconnection messages
+  });
+  connection.onClose(() => {
     typingIndicator.classList.add("hidden");
-  };
+    isProcessing = false;
+  });
   
-  socket.onmessage = (ev) => {
-    try {
-      const msg = JSON.parse(String(ev.data)) as ServerMessage;
-      handleServerMessage(msg);
-    } catch {
-      // ignore non-JSON
-    }
-  };
-  
-  socket.onerror = () => {
-    addBubble("system", "Connection error. Please refresh the page.");
-  };
-  
-  socket.onclose = () => {
-    isOpen = false;
-    socket = null;
-    typingIndicator.classList.add("hidden");
-  };
-
-  function send(obj: unknown) {
-    const json = JSON.stringify(obj);
-    if (isOpen && socket?.readyState === WebSocket.OPEN) {
-      socket.send(json);
-    } else {
-      messageQueue.push(json);
-    }
-  }
-
   (window as unknown as { chatSend: (text: string) => void }).chatSend = (text: string) => {
-    send({ type: "user_message", text });
+    connection?.send({ type: "user_message", text });
   };
 }
 
 function handleServerMessage(msg: ServerMessage): void {
-  if (msg.type === "assistant_delta") {
-    if (!currentAssistantBubble) {
-      currentAssistantBubble = addBubble("assistant", "");
+  switch (msg.type) {
+    case "assistant_delta": {
+      if (!currentAssistantBubble) {
+        currentAssistantBubble = addBubble("assistant", "");
+      }
+      currentAssistantBubble.textContent += String(msg.text ?? "");
+      scrollToBottom();
+      break;
     }
-    currentAssistantBubble.textContent += String(msg.text ?? "");
-    scrollToBottom();
-  } else if (msg.type === "assistant_done") {
-    currentAssistantBubble = null;
-    typingIndicator.classList.add("hidden");
-  } else if (msg.type === "tool_start") {
-    addBubble("system", `Running ${String(msg.tool)}...`);
-    typingIndicator.classList.remove("hidden");
-  } else if (msg.type === "error") {
-    addBubble("system", `Error: ${String(msg.message)}`);
-    typingIndicator.classList.add("hidden");
-  } else if (msg.type === "system") {
-    addBubble("system", String(msg.text));
+    case "assistant_done": {
+      currentAssistantBubble = null;
+      typingIndicator.classList.add("hidden");
+      isProcessing = false;
+      break;
+    }
+    case "tool_start": {
+      addBubble("system", `Running ${String(msg.tool)}...`);
+      typingIndicator.classList.remove("hidden");
+      break;
+    }
+    case "error": {
+      addBubble("system", `Error: ${String(msg.message)}`);
+      typingIndicator.classList.add("hidden");
+      isProcessing = false;
+      break;
+    }
+    case "system": {
+      addBubble("system", String(msg.text));
+      break;
+    }
+    case "state": {
+      // Handle state updates
+      break;
+    }
   }
 }
 
@@ -318,11 +274,13 @@ function scrollToBottom(): void {
 }
 
 function sendChat(): void {
+  if (isProcessing) return;
   const text = chatInput.value.trim();
   if (!text) return;
   addBubble("user", text);
   chatInput.value = "";
   typingIndicator.classList.remove("hidden");
+  isProcessing = true;
   const sender = (window as unknown as { chatSend?: (text: string) => void }).chatSend;
   if (sender) sender(text);
 }
@@ -404,17 +362,16 @@ function init(): void {
   });
   
   signOutBtn.addEventListener("click", () => {
+    connection?.close();
+    connection = null;
     persistSettings({ sessionId: "", token: "", recentRepos: [] });
     settings = loadSettings();
-    if (socket) {
-      socket.close();
-      socket = null;
-    }
     show(signInSection);
     hide(repoSection);
     hide(chatSection);
     repoUrlInput.value = "";
     branchInput.value = "";
+    chatHistory.innerHTML = "";
   });
 }
 
