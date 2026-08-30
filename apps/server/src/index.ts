@@ -3,18 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
+import { SessionManager } from "./session.js";
+import { requireAuth, checkWsToken } from "./auth.js";
 import { withGithubToken, redactSecrets } from "./secrets.js";
-import { requireAuth, checkWsToken, AUTH_TOKEN } from "./auth.js";
-import { SessionManager, type AgentConfig as CjwConfig } from "@codejustwrite/core";
 
 // Constants
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const WORKSPACES_DIR = process.env.WORKSPACES_DIR || "/tmp/cjw-workspaces";
 const SESSION_TTL_MINUTES = parseInt(process.env.SESSION_TTL_MINUTES || "60", 10);
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "50", 10);
+const AUTH_TOKEN = process.env.CJW_AUTH_TOKEN;
+const GITHUB_TOKEN = process.env.CJW_GITHUB_TOKEN;
+const SECRET_KEY = process.env.CJW_SECRET_KEY || "";
 
-// Config
-const config: CjwConfig = {
+// Config - matches CjwConfig from core
+const config = {
   provider: (process.env.LLM_PROVIDER || "openai") as "openai" | "deepinfra" | "openrouter",
   model: process.env.LLM_MODEL || "gpt-4o-mini",
   apiKey: process.env.LLM_API_KEY || "",
@@ -22,6 +25,7 @@ const config: CjwConfig = {
   maxTokens: parseInt(process.env.LLM_MAX_TOKENS || "4096", 10),
   temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
   shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || "120", 10),
+  githubToken: GITHUB_TOKEN,
 };
 
 // Session manager
@@ -39,8 +43,9 @@ async function checkHealth() {
   // Check GitHub API connectivity
   try {
     const start = Date.now();
-    const ghResponse = await fetch("https://api.github.com/rate_limit", {
-      headers: withGithubToken({ "User-Agent": "CodeJustWrite/1.0" })
+    const ghUrl = withGithubToken("https://api.github.com/rate_limit", GITHUB_TOKEN);
+    const ghResponse = await fetch(ghUrl, {
+      headers: { "User-Agent": "CodeJustWrite/1.0" }
     });
     result.checks.github = { status: ghResponse.ok ? "ok" : "error", latency: Date.now() - start };
   } catch {
@@ -83,7 +88,6 @@ function logAudit(action: string, data: Record<string, unknown> = {}) {
 // Create HTTP server
 const server = http.createServer(async (req, res) => {
   const start = Date.now();
-  const reqId = Math.random().toString(36).substring(2, 15);
   
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -138,7 +142,7 @@ const server = http.createServer(async (req, res) => {
   
   // Auth-protected endpoints
   if (pathname.startsWith("/api/")) {
-    const authResult = requireAuth(req);
+    const authResult = requireAuth(AUTH_TOKEN);
     if (!authResult.success) {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: authResult.error }));
@@ -149,8 +153,9 @@ const server = http.createServer(async (req, res) => {
   
   // API endpoints
   if (pathname === "/api/repos") {
-    const repos = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
-      headers: withGithubToken({ "User-Agent": "CodeJustWrite/1.0" })
+    const reposUrl = withGithubToken("https://api.github.com/user/repos?per_page=100&sort=updated", GITHUB_TOKEN);
+    const repos = await fetch(reposUrl, {
+      headers: { "User-Agent": "CodeJustWrite/1.0" }
     }).then(r => r.json());
     
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -214,14 +219,18 @@ wss.on("connection", (ws: WebSocket, sessionId: string) => {
   
   ws.on("close", () => {
     logAudit("ws_disconnect", { sessionId });
-    sessions.closeSession(sessionId);
+    sessions.removeSession(sessionId);
   });
   
   ws.on("error", (err) => {
     log("ERROR", "ws_error", { sessionId, error: err.message });
   });
   
-  sessions.handleSession(sessionId, ws);
+  // Find session and attach
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.attach(ws);
+  }
 });
 
 server.on("upgrade", (req, socket, head) => {
@@ -232,7 +241,7 @@ server.on("upgrade", (req, socket, head) => {
     const sessionId = parsedUrl.query.sessionId as string;
     const token = parsedUrl.query.token as string;
     
-    if (!sessionId || !checkWsToken(token, AUTH_TOKEN)) {
+    if (!sessionId || !checkWsToken(AUTH_TOKEN, token)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       logAudit("ws_rejected", { reason: "Invalid token or sessionId" });
@@ -262,7 +271,6 @@ setInterval(() => {
 process.on("SIGTERM", () => {
   log("INFO", "shutdown", { reason: "SIGTERM" });
   wss.close();
-  sessions.cleanup();
   server.close(() => {
     process.exit(0);
   });
