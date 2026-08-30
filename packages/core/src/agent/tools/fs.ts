@@ -3,7 +3,6 @@ import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type { ToolDefinition } from "./types.js";
 
-/** Resolves a path the model gave us and refuses to leave the repo root. */
 function resolveInRepo(repoRoot: string, relPath: string): string {
   const resolved = path.resolve(repoRoot, relPath);
   const normalizedRoot = path.resolve(repoRoot);
@@ -13,26 +12,36 @@ function resolveInRepo(repoRoot: string, relPath: string): string {
   return resolved;
 }
 
+async function readTextFile(filePath: string): Promise<string> {
+  return fs.readFile(filePath, "utf8");
+}
+
+async function writeTextFile(filePath: string, content: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, "utf8");
+}
+
+function patchDiff(filePath: string, before: string, after: string): string {
+  return createTwoFilesPatch(filePath, filePath, before, after);
+}
+
+function numberedLines(content: string): string {
+  return content.split("\n").map((line, i) => `${i + 1}\t${line}`).join("\n");
+}
+
 export const readFileTool: ToolDefinition = {
   spec: {
     name: "read_file",
     description: "Read the contents of a text file in the repository, given a path relative to the repo root.",
     parameters: {
       type: "object",
-      properties: {
-        path: { type: "string", description: "Path relative to the repo root." },
-      },
+      properties: { path: { type: "string", description: "Path relative to the repo root." } },
       required: ["path"],
     },
   },
   async run(args, ctx) {
-    const p = resolveInRepo(ctx.repoRoot, String(args.path));
-    const content = await fs.readFile(p, "utf8");
-    const numbered = content
-      .split("\n")
-      .map((line, i) => `${i + 1}\t${line}`)
-      .join("\n");
-    return numbered;
+    const content = await readTextFile(resolveInRepo(ctx.repoRoot, String(args.path)));
+    return numberedLines(content);
   },
 };
 
@@ -42,15 +51,12 @@ export const listDirTool: ToolDefinition = {
     description: "List files and directories at a given path relative to the repo root (non-recursive).",
     parameters: {
       type: "object",
-      properties: {
-        path: { type: "string", description: "Path relative to the repo root. Use '.' for the repo root." },
-      },
+      properties: { path: { type: "string", description: "Path relative to the repo root. Use '.' for the repo root." } },
       required: ["path"],
     },
   },
   async run(args, ctx) {
-    const p = resolveInRepo(ctx.repoRoot, String(args.path));
-    const entries = await fs.readdir(p, { withFileTypes: true });
+    const entries = await fs.readdir(resolveInRepo(ctx.repoRoot, String(args.path)), { withFileTypes: true });
     return entries
       .map((e) => `${e.isDirectory() ? "d" : "f"} ${e.name}`)
       .sort()
@@ -61,8 +67,7 @@ export const listDirTool: ToolDefinition = {
 export const writeFileTool: ToolDefinition = {
   spec: {
     name: "write_file",
-    description:
-      "Create or fully overwrite a text file at the given path relative to the repo root. Prefer edit_file for small changes to existing files.",
+    description: "Create or fully overwrite a text file at the given path relative to the repo root.",
     parameters: {
       type: "object",
       properties: {
@@ -75,18 +80,10 @@ export const writeFileTool: ToolDefinition = {
   requiresConfirmation: true,
   async run(args, ctx) {
     const p = resolveInRepo(ctx.repoRoot, String(args.path));
-    let before = "";
-    try {
-      before = await fs.readFile(p, "utf8");
-    } catch {
-      // new file
-    }
+    const before = await readTextFile(p).catch(() => "");
     const after = String(args.content);
-    const patch = createTwoFilesPatch(String(args.path), String(args.path), before, after);
-    ctx.log(patch);
-
-    await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, after, "utf8");
+    ctx.log(patchDiff(String(args.path), before, after));
+    await writeTextFile(p, after);
     return `Wrote ${after.length} bytes to ${args.path}`;
   },
 };
@@ -94,8 +91,7 @@ export const writeFileTool: ToolDefinition = {
 export const editFileTool: ToolDefinition = {
   spec: {
     name: "edit_file",
-    description:
-      "Replace an exact, unique occurrence of `find` with `replace` in an existing file. Fails if `find` is not found exactly once, so include enough surrounding context to make it unique.",
+    description: "Replace an exact, unique occurrence of `find` with `replace` in an existing file.",
     parameters: {
       type: "object",
       properties: {
@@ -109,20 +105,17 @@ export const editFileTool: ToolDefinition = {
   requiresConfirmation: true,
   async run(args, ctx) {
     const p = resolveInRepo(ctx.repoRoot, String(args.path));
-    const before = await fs.readFile(p, "utf8");
+    const filePath = String(args.path);
+    const before = await readTextFile(p);
     const find = String(args.find);
     const occurrences = before.split(find).length - 1;
-    if (occurrences === 0) {
-      throw new Error(`find text not found in ${args.path}`);
-    }
-    if (occurrences > 1) {
-      throw new Error(`find text is not unique in ${args.path} (${occurrences} matches) — add more context.`);
-    }
-    const after = before.replace(find, String(args.replace));
-    const patch = createTwoFilesPatch(String(args.path), String(args.path), before, after);
-    ctx.log(patch);
 
-    await fs.writeFile(p, after, "utf8");
-    return `Edited ${args.path}`;
+    if (occurrences === 0) throw new Error(`find text not found in ${filePath}`);
+    if (occurrences > 1) throw new Error(`find text is not unique in ${filePath} (${occurrences} matches)`);
+
+    const after = before.replace(find, String(args.replace));
+    ctx.log(patchDiff(filePath, before, after));
+    await writeTextFile(p, after);
+    return `Edited ${filePath}`;
   },
 };

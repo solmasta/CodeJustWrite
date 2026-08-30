@@ -16,16 +16,23 @@ export const runShellTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const command = String(args.command);
-    const result = await execSandboxed(command, {
+    const result = await execSandboxed(String(args.command), {
       cwd: ctx.repoRoot,
       timeoutSec: ctx.config.shellTimeoutSec,
     });
+
     const status = result.timedOut
       ? `TIMED OUT after ${ctx.config.shellTimeoutSec}s`
       : `exit code ${result.code}`;
-    return [`$ ${command}`, `(${status})`, "--- stdout ---", result.stdout, "--- stderr ---", result.stderr].join(
-      "\n"
-    );
+
+    return [
+      `$ ${args.command}`,
+      `(${status})`,
+      "--- stdout ---",
+      result.stdout,
+      "--- stderr ---",
+      result.stderr,
+    ]
+      .join("\n");
   },
 };

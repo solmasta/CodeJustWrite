@@ -1,14 +1,30 @@
 import { execSandboxed } from "../../sandbox/exec.js";
 import type { ToolDefinition } from "./types.js";
 
-async function git(repoRoot: string, args: string, timeoutSec = 30) {
+interface GitResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+async function git(repoRoot: string, args: string, timeoutSec = 30): Promise<GitResult> {
   return execSandboxed(`git ${args}`, { cwd: repoRoot, timeoutSec });
+}
+
+function sanitizeBranch(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._/-]/g, "");
+}
+
+function checkGitSuccess(result: GitResult): void {
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout);
+  }
 }
 
 export const gitStatusTool: ToolDefinition = {
   spec: {
     name: "git_status",
-    description: "Show `git status --short` for the repository.",
+    description: "Show `git status --short --branch` for the repository.",
     parameters: { type: "object", properties: {} },
   },
   async run(_args, ctx) {
@@ -29,7 +45,8 @@ export const gitDiffTool: ToolDefinition = {
     },
   },
   async run(args, ctx) {
-    const scope = args.path ? ` -- "${String(args.path)}"` : "";
+    const path = args.path ? String(args.path).replace(/"/g, '\\"') : "";
+    const scope = path ? ` -- "${path}"` : "";
     const result = await git(ctx.repoRoot, `diff HEAD${scope}`);
     return result.stdout || "(no changes)";
   },
@@ -49,9 +66,11 @@ export const gitCreateBranchTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const result = await git(ctx.repoRoot, `checkout -b ${String(args.branch)}`);
-    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
-    return `Switched to new branch ${args.branch}`;
+    const branch = sanitizeBranch(String(args.branch));
+    if (!branch) throw new Error("Invalid branch name");
+    const result = await git(ctx.repoRoot, `checkout -b "${branch}"`);
+    checkGitSuccess(result);
+    return `Switched to new branch ${branch}`;
   },
 };
 
@@ -74,13 +93,14 @@ export const gitCommitTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const paths = Array.isArray(args.paths) && args.paths.length ? (args.paths as string[]) : ["-A"];
-    const addResult = await git(ctx.repoRoot, `add ${paths.map((p) => `"${p}"`).join(" ")}`);
-    if (addResult.code !== 0) throw new Error(addResult.stderr || addResult.stdout);
+    const paths = Array.isArray(args.paths) && args.paths.length ? args.paths as string[] : ["-A"];
+    const stageArg = paths[0] === "-A" ? "-A" : paths.map((p) => `"${p.replace(/"/g, '\\"')}"}`).join(" ");
+    const addResult = await git(ctx.repoRoot, `add ${stageArg}`);
+    checkGitSuccess(addResult);
 
     const message = String(args.message).replace(/"/g, '\\"');
     const commitResult = await git(ctx.repoRoot, `commit -m "${message}"`);
-    if (commitResult.code !== 0) throw new Error(commitResult.stderr || commitResult.stdout);
+    checkGitSuccess(commitResult);
     return commitResult.stdout;
   },
 };
@@ -99,11 +119,11 @@ export const gitMergeTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const result = await git(ctx.repoRoot, `merge --no-edit ${String(args.branch)}`);
+    const branch = sanitizeBranch(String(args.branch));
+    if (!branch) throw new Error("Invalid branch name");
+    const result = await git(ctx.repoRoot, `merge --no-edit "${branch}"`);
     if (result.code !== 0) {
-      throw new Error(
-        `Merge failed (resolve manually, do not force):\n${result.stderr || result.stdout}`
-      );
+      throw new Error(`Merge failed (resolve manually, do not force):\n${result.stderr || result.stdout}`);
     }
     return result.stdout;
   },
@@ -122,10 +142,12 @@ export const gitPushTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const branchArg = args.branch ? String(args.branch) : null;
+    const branchArg = args.branch ? sanitizeBranch(String(args.branch)) : null;
+    if (branchArg === "") throw new Error("Invalid branch name");
+
     const branch = branchArg ?? (await git(ctx.repoRoot, "rev-parse --abbrev-ref HEAD")).stdout.trim();
-    const result = await git(ctx.repoRoot, `push -u origin ${branch}`, 60);
-    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    const result = await git(ctx.repoRoot, `push -u origin "${branch}"`, 60);
+    checkGitSuccess(result);
     return result.stderr || result.stdout || `Pushed ${branch} to origin`;
   },
 };
