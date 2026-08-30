@@ -1,234 +1,263 @@
-import { config as loadDotenv } from "dotenv";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createServer } from "node:http";
-import os from "node:os";
-import express, { Request, Response, NextFunction } from "express";
-import { WebSocketServer } from "ws";
-import { loadConfig, type ProviderName } from "@codejustwrite/core";
-import { loadServerConfig } from "./config.js";
-import { requireAuth, checkWsToken } from "./auth.js";
-import { SessionManager } from "./session.js";
-import { listRepos } from "./github.js";
+import express from "express";
+import { WebSocketServer, WebSocket } from "ws";
+import { SessionManager } from "./session";
+import { withAuth, requireToken, TokenData } from "./auth";
+import { getSecret } from "./secrets";
+import { createServer } from "http";
+import { resolve } from "path";
+import { existsSync } from "fs";
+import type { IncomingMessage } from "http";
+import type { Duplex } from "stream";
 
-loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
+const app = express();
+const server = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webDist = path.join(__dirname, "..", "..", "web", "dist");
+app.use(express.json({ limit: "100kb" }));
 
-const serverConfig = loadServerConfig();
-const agentConfig = loadConfig();
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
 
-if (!serverConfig.authToken) {
-  console.warn(
-    "[cjw-server] WARNING: CJW_AUTH_TOKEN is not set. This server accepts requests from anyone who can " +
-      "reach it, and it can run shell commands and push code. Set CJW_AUTH_TOKEN before deploying publicly."
-  );
+// Simple rate limiter with cleanup
+interface RateLimitEntry {
+  count: number;
+  resetTime: number;
 }
 
-const workspacesDir = process.env.CJW_WORKSPACES_DIR || path.join(os.tmpdir(), "cjw-sessions");
-const sessions = new SessionManager(workspacesDir, agentConfig, serverConfig.sessionTtlMs, serverConfig.maxSessions);
+const rateLimitMap = new Map<string, RateLimitEntry>();
 
-// Rate limiting: map IP -> { count, resetTime }
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 60; // 60 requests per minute
-
-function rateLimit(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
+function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
   const now = Date.now();
+  const entry = rateLimitMap.get(key);
   
-  const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetTime) {
-    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
-    next();
-    return;
+    rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
+    return true;
+  }
+  
+  if (entry.count >= limit) {
+    return false;
   }
   
   entry.count++;
-  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
-    res.status(429).json({ error: "Rate limit exceeded. Try again later." });
-    return;
-  }
-  next();
+  return true;
 }
 
-const app = express();
-app.use(express.json());
-app.use(rateLimit);
+// Clean up expired entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetTime) {
+      rateLimitMap.delete(key);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`Rate limit cleanup: removed ${cleaned} expired entries`);
+  }
+}, 5 * 60 * 1000);
 
-// Security headers
-app.use((_req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("X-XSS-Protection", "1; mode=block");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  // CSP for PWA
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:;"
-  );
+// HTTP rate limiting (60 requests per minute per IP)
+app.use((req, res, next) => {
+  const ip = req.ip || "unknown";
+  if (!checkRateLimit(ip, 60, 60_000)) {
+    res.status(429).json({ error: "Too many requests" });
+    return;
+  }
   next();
 });
 
+const sessions = new SessionManager();
+
+// Health check endpoint (no auth required)
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, activeSessions: sessions.size });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.use("/api", requireAuth(serverConfig.authToken));
-
-app.get("/api/auth/status", (_req, res) => {
-  res.json({
-    authenticated: true,
-    hasGithubToken: Boolean(agentConfig.githubToken),
-  });
+// Auth status endpoint
+app.get("/api/auth/status", withAuth, (_req, res) => {
+  res.json({ authenticated: true });
 });
 
-app.get("/api/repos", async (_req, res) => {
-  if (!agentConfig.githubToken) {
-    res.status(400).json({ error: "GITHUB_TOKEN is not configured on the server." });
+// Session start endpoint
+app.post("/api/session/start", requireToken, async (req, res) => {
+  const { repoUrl, branch = "main" } = req.body || {};
+  if (!repoUrl || typeof repoUrl !== "string") {
+    res.status(400).json({ error: "Missing repoUrl" });
     return;
   }
   try {
-    const repos = await listRepos(agentConfig.githubToken);
-    res.json({ repos });
-  } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    const session = await sessions.create(repoUrl, branch, res.locals.token);
+    res.json({ sessionId: session.id });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
   }
 });
 
-app.post("/api/sessions", async (req, res) => {
-  const { repoUrl, branch } = req.body ?? {};
-  if (typeof repoUrl !== "string" || !repoUrl.trim()) {
-    res.status(400).json({ error: "repoUrl is required" });
-    return;
-  }
+// GitHub repos endpoint
+app.get("/api/github/repos", withAuth, async (req, res) => {
+  const tokenData: TokenData = res.locals.token;
+  const query = String(req.query.q || "");
   try {
-    const session = await sessions.createSession(repoUrl.trim(), typeof branch === "string" ? branch : undefined);
-    res.json({
-      sessionId: session.id,
-      repoRoot: session.repoRoot,
-      provider: session.provider,
-      model: session.model,
-    });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    // Use GitHub CLI if available, otherwise REST API
+    const repos = await fetchGitHubRepos(tokenData, query);
+    res.json(repos);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
   }
 });
 
-app.delete("/api/sessions/:id", async (req, res) => {
-  await sessions.removeSession(req.params.id);
-  res.json({ ok: true });
-});
+async function fetchGitHubRepos(token: TokenData, query: string): Promise<Array<{ full_name: string; clone_url: string; default_branch?: string }>> {
+  const headers: Record<string, string> = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "CodeJustWrite/1.0",
+  };
+  
+  if (token.githubToken) {
+    headers["Authorization"] = `token ${token.githubToken}`;
+  }
+  
+  const url = query
+    ? `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}+in:name&sort=stars&order=desc&per_page=30`
+    : `https://api.github.com/user/repos?per_page=30&sort=updated`;
+  
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
+  
+  const data = await res.json() as { items?: Array<{ full_name: string; clone_url: string; default_branch?: string }>; full_name?: string };
+  
+  if (query && data.items) {
+    return data.items;
+  }
+  return Array.isArray(data) ? data : [];
+}
 
-// Serve the built PWA (apps/web/dist) and fall back to index.html for client-side routes.
-app.use(express.static(webDist));
-app.get(/^(?!\/api).*/, (_req, res) => {
-  res.sendFile(path.join(webDist, "index.html"), (err) => {
-    if (err) res.status(404).send("Web app not built yet — run `npm run build:web`.");
+// Serve static files from web app
+const webDist = resolve(__dirname, "../../web/dist");
+if (existsSync(webDist)) {
+  app.use(express.static(webDist));
+  app.get("*", (_req, res) => {
+    res.sendFile(resolve(webDist, "index.html"));
   });
-});
+}
 
-const httpServer = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
-
-// WebSocket rate limiting
-const wsRateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const WS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const WS_RATE_LIMIT_MAX_MESSAGES = 100; // 100 messages per minute
-
-httpServer.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "", "http://localhost");
-  if (url.pathname !== "/ws") {
-    socket.destroy();
-    return;
-  }
-
-  // Get token from header instead of query param (more secure)
-  const authHeader = req.headers["authorization"];
-  const token = typeof authHeader === "string" && authHeader.startsWith("Bearer ") 
-    ? authHeader.slice(7) 
-    : url.searchParams.get("token"); // Fallback for backwards compatibility
-    
+// WebSocket upgrade handling
+server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  // Parse URL and query params
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const sessionId = url.searchParams.get("sessionId");
-  if (!checkWsToken(serverConfig.authToken, token) || !sessionId) {
-    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+  const token = url.searchParams.get("token");
+  
+  // Validate session
+  if (!sessionId) {
     socket.destroy();
     return;
   }
-
+  
   const session = sessions.get(sessionId);
   if (!session) {
-    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
     return;
   }
-
-  // Rate limit by IP
-  const ip = req.socket.remoteAddress || "unknown";
-  const now = Date.now();
-  const entry = wsRateLimitMap.get(ip);
-  if (!entry || now > entry.resetTime) {
-    wsRateLimitMap.set(ip, { count: 1, resetTime: now + WS_RATE_LIMIT_WINDOW_MS });
-  } else {
-    entry.count++;
-    if (entry.count > WS_RATE_LIMIT_MAX_MESSAGES) {
-      socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
-      socket.destroy();
-      return;
-    }
+  
+  // Validate token (prefer header, fallback to query param)
+  const authHeader = req.headers.authorization;
+  let tokenValid = false;
+  
+  if (authHeader?.startsWith("Bearer ")) {
+    const headerToken = authHeader.slice(7);
+    tokenValid = headerToken === session.token || headerToken === getSecret("AUTH_TOKEN");
+  } else if (token) {
+    // Fallback to query param (less secure, exposed in logs/proxies)
+    tokenValid = token === session.token || token === getSecret("AUTH_TOKEN");
   }
-
+  
+  if (!tokenValid) {
+    socket.destroy();
+    return;
+  }
+  
+  // WebSocket rate limiting (100 messages per minute per session)
+  const wsKey = `ws:${sessionId}`;
+  
   wss.handleUpgrade(req, socket, head, (ws) => {
-    session.attach(ws);
-
-    // Message size limit
-    ws.on("message", (raw) => {
-      // Reject messages > 100KB
-      if (raw.length > 100 * 1024) {
-        session.send({ type: "error", message: "Message too large (max 100KB)" });
-        return;
-      }
-      
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        session.send({ type: "error", message: "Malformed message" });
-        return;
-      }
-      session.touch();
-
-      switch (msg.type) {
-        case "user_message":
-          void session.handleUserMessage(String(msg.text ?? ""));
-          break;
-        case "tool_decision":
-          session.resolveConfirmation(String(msg.callId), Boolean(msg.approved));
-          break;
-        case "set_auto_approve":
-          session.setAutoApprove(Boolean(msg.value));
-          break;
-        case "set_provider":
-          session.setProvider(
-            msg.provider === "deepinfra" || msg.provider === "openrouter"
-              ? (msg.provider as ProviderName)
-              : "openai"
-          );
-          session.send({ type: "state", provider: session.provider, model: session.model, autoApprove: session.autoApprove, repoRoot: session.repoRoot });
-          break;
-        case "set_model":
-          session.setModel(String(msg.model ?? session.model));
-          break;
-        default:
-          session.send({ type: "error", message: `Unknown message type: ${String(msg.type)}` });
-      }
-    });
-
-    ws.on("close", () => session.detach(ws));
+    wss.emit("connection", ws, req, session, wsKey);
   });
 });
 
-httpServer.listen(serverConfig.port, () => {
-  console.log(`[cjw-server] listening on :${serverConfig.port} (web dist: ${webDist})`);
+// WebSocket connection handling
+wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: string; send(message: unknown): void }, wsKey: string) => {
+  // Track message count for rate limiting
+  let messageCount = 0;
+  let resetTime = Date.now() + 60_000;
+  
+  ws.on("message", (data) => {
+    // Check rate limit
+    const now = Date.now();
+    if (now > resetTime) {
+      messageCount = 0;
+      resetTime = now + 60_000;
+    }
+    
+    if (messageCount >= 100) {
+      ws.send(JSON.stringify({ type: "error", message: "Rate limit exceeded" }));
+      return;
+    }
+    
+    // Check message size (100KB limit)
+    if (data instanceof Buffer && data.length > 100 * 1024) {
+      ws.send(JSON.stringify({ type: "error", message: "Message too large" }));
+      return;
+    }
+    
+    messageCount++;
+    
+    // Forward to agent
+    try {
+      const msg = JSON.parse(String(data));
+      session.send(msg);
+    } catch {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+    }
+  });
+  
+  // Echo back session events
+  const originalSend = session.send.bind(session);
+  session.send = (message: unknown) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    }
+    return originalSend(message);
+  };
+  
+  ws.on("close", () => {
+    // Cleanup: restore original send
+    session.send = originalSend;
+  });
+});
+
+// Graceful shutdown
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received, shutting down gracefully");
+  server.close(() => {
+    console.log("Server closed");
+    process.exit(0);
+  });
+  
+  // Close all WebSocket connections
+  wss.clients.forEach((client) => {
+    client.close();
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });

@@ -1,470 +1,421 @@
-import "./style.css";
-import { loadSettings, saveSettings, httpBase, wsBase, type Settings } from "./settings.js";
+import type { ChatMessage, ServerMessage, Settings } from "./types";
+import { debounce, loadSettings, persistSettings } from "./settings";
 
-const app = document.getElementById("app")!;
-const settings = loadSettings();
+// --- DOM refs ---
+const signInSection = el<HTMLDivElement>("#signInSection");
+const repoSection = el<HTMLDivElement>("#repoSection");
+const chatSection = el<HTMLDivElement>("#chatSection");
+
+const serverInput = el<HTMLInputElement>("#serverUrl");
+const tokenInput = el<HTMLInputElement>("#token");
+const continueBtn = el<HTMLButtonElement>("#continueBtn");
+const signInError = el<HTMLParagraphElement>("#signInError");
+
+const repoUrlInput = el<HTMLInputElement>("#repoUrl");
+const branchInput = el<HTMLInputElement>("#branch");
+const startBtn = el<HTMLButtonElement>("#startBtn");
+const browseBtn = el<HTMLButtonElement>("#browseBtn");
+const repoError = el<HTMLParagraphElement>("#repoError");
+
+const chatHistory = el<HTMLDivElement>("#chatHistory");
+const chatInput = el<HTMLInputElement>("#chatInput");
+const sendBtn = el<HTMLButtonElement>("#sendBtn");
+const typingIndicator = el<HTMLDivElement>("#typingIndicator");
+const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
+
+const settingsModal = el<HTMLDialogElement>("#settingsModal");
+const providerSelect = el<HTMLSelectElement>("#provider");
+const modelInput = el<HTMLInputElement>("#model");
+const apiKeyInput = el<HTMLInputElement>("#apiKey");
+const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
+const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
+const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
+
+const signOutBtn = el<HTMLButtonElement>("#signOutBtn");
+const repoList = el<HTMLDivElement>("#repoList");
+const repoSearch = el<HTMLInputElement>("#repoSearch");
+const recentReposSection = el<HTMLDivElement>("#recentReposSection");
+const recentReposList = el<HTMLDivElement>("#recentReposList");
+
+// --- State ---
 let socket: WebSocket | null = null;
-let lastToolCard: HTMLElement | null = null;
-let currentAssistantBubble: HTMLElement | null = null;
+let currentAssistantBubble: HTMLDivElement | null = null;
+let settings: Settings = loadSettings();
 
-// ---------- DOM utilities ----------
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  Object.assign(node, props);
-  for (const child of children) node.append(child);
-  return node;
+// --- Helpers ---
+function el<T extends HTMLElement>(sel: string): T {
+  const e = document.querySelector(sel);
+  if (!e) throw new Error(`Element not found: ${sel}`);
+  return e as T;
 }
 
-function on<E extends Event>(target: EventTarget, event: string, handler: E extends Event ? (e: E) => void : never): void {
-  target.addEventListener(event, handler as EventListener);
+function apiBase(s: Settings): string {
+  return (s.serverUrl || location.origin).replace(/\/$/, "");
 }
 
-// ---------- Settings helpers ----------
-
-function persistSettings(updates: Partial<Settings>): void {
-  Object.assign(settings, updates);
-  saveSettings(settings);
+function wsBase(s: Settings): string {
+  const base = apiBase(s);
+  return base.replace(/^http/, "ws");
 }
 
-// ---------- API helpers ----------
-
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${httpBase(settings)}${path}`, {
-    ...options,
-    headers: {
-      "content-type": "application/json",
-      ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
-      ...options?.headers,
-    },
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data as T;
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const base = apiBase(settings);
+  const url = `${base}${path}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as Record<string, string> || {}),
+  };
+  if (settings.token) headers["Authorization"] = `Bearer ${settings.token}`;
+  return fetch(url, { ...init, headers });
 }
 
-// ---------- Recent repos ----------
-
-interface RepoInfo {
-  fullName: string;
-  cloneUrl: string;
-  defaultBranch: string;
-  private: boolean;
+function show(el: HTMLElement) {
+  el.classList.remove("hidden");
 }
 
-function getRecentRepos(): RepoInfo[] {
+function hide(el: HTMLElement) {
+  el.classList.add("hidden");
+}
+
+function text(el: HTMLElement, msg: string) {
+  el.textContent = msg;
+}
+
+// Validate URL format
+function isValidUrl(url: string): boolean {
   try {
-    return JSON.parse(localStorage.getItem("cjw.recent") || "[]");
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
   } catch {
-    return [];
+    return false;
   }
 }
 
-function addRecentRepo(repo: RepoInfo): void {
+// --- Sign In ---
+async function handleSignIn(): Promise<void> {
+  const serverUrl = serverInput.value.trim();
+  const token = tokenInput.value.trim();
+  
+  // Validate URL format
+  if (serverUrl && !isValidUrl(serverUrl)) {
+    text(signInError, "Please enter a valid URL (http:// or https://)");
+    show(signInError);
+    return;
+  }
+  
+  persistSettings({ serverUrl, token });
+  settings = loadSettings();
+
   try {
-    const recent = getRecentRepos().filter((r) => r.fullName !== repo.fullName);
-    recent.unshift(repo);
-    localStorage.setItem("cjw.recent", JSON.stringify(recent.slice(0, 5)));
-  } catch {
-    // localStorage unavailable
+    const res = await apiFetch("/api/auth/status");
+    if (!res.ok) {
+      const err = await res.text().catch(() => "Unknown error");
+      throw new Error(err || "Invalid token");
+    }
+    hide(signInError);
+    showRepoSection();
+  } catch (e) {
+    text(signInError, String(e instanceof Error ? e.message : e));
+    show(signInError);
   }
 }
 
-// ---------- Sign-in screen ----------
+// --- Repo Selection ---
+async function showRepoSection(): Promise<void> {
+  hide(signInSection);
+  show(repoSection);
+  await loadRecentRepos();
+  await loadRepos("");
+}
 
-function renderSignIn(errorMessage?: string): void {
-  app.innerHTML = "";
-
-  const serverInput = el("input", { placeholder: "server URL (leave blank for same origin)", value: settings.serverUrl });
-  const tokenInput = el("input", { type: "password", placeholder: "server token (if required)", value: settings.token });
-  const errorDiv = errorMessage ? el("div", { className: "error", textContent: errorMessage }) : null;
-
-  const form = el(
-    "div",
-    { className: "setup sign-in" },
-    el("h2", { textContent: "CodeJustWrite" }),
-    el("p", { textContent: "Sign in to access your repositories." }),
-    el("label", {}, "Server URL", serverInput),
-    el("label", {}, "Access token", tokenInput),
-    errorDiv,
-    el(
-      "div",
-      { className: "btn-row" },
-      el("button", { className: "primary", textContent: "Continue" }, onClick(() => handleSignIn())),
-      el("button", { className: "secondary", textContent: "Skip sign-in" }, onClick(() => handleSkip()))
-    )
-  );
-  app.append(form);
-
-  async function handleSignIn(): Promise<void> {
-    persistSettings({ serverUrl: serverInput.value.trim(), token: tokenInput.value.trim() });
-    try {
-      await apiFetch<{ ok: boolean }>("/api/auth/status");
-      renderRepoSelect();
-    } catch (err) {
-      renderSignIn(err instanceof Error ? err.message : String(err));
-    }
+async function loadRecentRepos(): Promise<void> {
+  const recent = settings.recentRepos || [];
+  if (recent.length === 0) {
+    hide(recentReposSection);
+    return;
   }
-
-  function handleSkip(): void {
-    persistSettings({ serverUrl: serverInput.value.trim(), token: tokenInput.value.trim() });
-    renderRepoSelect();
+  show(recentReposSection);
+  recentReposList.innerHTML = "";
+  for (const repo of recent.slice(0, 5)) {
+    const item = document.createElement("div");
+    item.className = "repo-item recent";
+    item.innerHTML = `<span class="repo-name">${escapeHtml(repo.full_name)}</span>`;
+    item.onclick = () => {
+      repoUrlInput.value = repo.clone_url;
+      branchInput.value = repo.default_branch || "main";
+    };
+    recentReposList.appendChild(item);
   }
 }
 
-// ---------- Repository selection screen ----------
-
-function renderRepoSelect(errorMessage?: string): void {
-  app.innerHTML = "";
-
-  const repoInput = el("input", { placeholder: "https://github.com/you/repo.git", value: settings.repoUrl });
-  const branchInput = el("input", { placeholder: "main (optional)", value: settings.branch });
-  const searchInput = el("input", { placeholder: "Search repositories…", value: "" });
-  const repoList = el("div", { className: "repo-list" });
-  const recentList = el("div", { className: "repo-list recent" });
-  const statusDiv = el("div", { className: "repo-status" });
-  const errorDiv = errorMessage ? el("div", { className: "error", textContent: errorMessage }) : null;
-
-  const form = el(
-    "div",
-    { className: "setup repo-select" },
-    el("h2", { textContent: "Choose a repository" }),
-    el("label", {}, "Repo URL", repoInput),
-    el("button", { className: "secondary", textContent: "Browse my repos" }, onClick(browseRepos)),
-    repoList,
-    statusDiv,
-    el(
-      "div",
-      { className: "row" },
-      el("label", {}, "Branch", branchInput),
-      el("button", { className: "text-btn small", textContent: "Sign out" }, onClick(signOut))
-    ),
-    errorDiv,
-    el("button", { className: "primary", textContent: "Start session" }, onClick(startSession))
-  );
-  app.append(form);
-
-  function signOut(): void {
-    persistSettings({ token: "" });
-    renderSignIn();
-  }
-
-  async function browseRepos(): Promise<void> {
+async function loadRepos(query: string): Promise<void> {
+  repoList.innerHTML = "<div class='loading'>Loading repositories...</div>";
+  try {
+    const res = await apiFetch(`/api/github/repos?q=${encodeURIComponent(query)}`);
+    if (!res.ok) throw new Error("Failed to load repositories");
+    const repos = await res.json() as Array<{ full_name: string; clone_url: string; default_branch?: string }>;
     repoList.innerHTML = "";
-    statusDiv.textContent = "Loading repositories…";
-    statusDiv.className = "repo-status";
-
-    try {
-      const data = await apiFetch<{ repos: RepoInfo[] }>("/api/repos");
-      statusDiv.textContent = "";
-
-      if (!data.repos.length) {
-        statusDiv.textContent = "No repositories found.";
-        return;
-      }
-
-      const searchContainer = el("div", { className: "search-container" }, searchInput);
-      form.insertBefore(searchContainer, repoList);
-      searchInput.addEventListener("input", () => filterRepos(data.repos));
-      filterRepos(data.repos);
-
-      const recent = getRecentRepos();
-      if (recent.length) {
-        const header = el("div", { className: "section-header", textContent: "Recent" });
-        form.insertBefore(header, searchContainer);
-        form.insertBefore(recentList, searchContainer);
-        renderRepoItems(recent, recentList);
-      }
-    } catch (err) {
-      statusDiv.textContent = err instanceof Error ? err.message : String(err);
-      statusDiv.className = "repo-status error";
-    }
-  }
-
-  function filterRepos(repos: RepoInfo[]): void {
-    repoList.innerHTML = "";
-    const query = searchInput.value.toLowerCase().trim();
-    const filtered = query ? repos.filter((r) => r.fullName.toLowerCase().includes(query)) : repos;
-
-    if (!filtered.length) {
-      repoList.append(el("div", { className: "repo-status", textContent: query ? "No matching repos." : "" }));
+    if (repos.length === 0) {
+      repoList.innerHTML = "<div class='empty'>No repositories found</div>";
       return;
     }
-    renderRepoItems(filtered, repoList);
-  }
-
-  function renderRepoItems(repos: RepoInfo[], container: HTMLElement): void {
     for (const repo of repos) {
-      const item = el(
-        "button",
-        { className: "repo-item", type: "button" },
-        el("span", { className: "name", textContent: repo.fullName }),
-        el("span", { className: "meta", textContent: repo.private ? "private" : "public" })
-      );
-      item.addEventListener("click", () => selectRepo(repo));
-      container.append(item);
+      const item = document.createElement("div");
+      item.className = "repo-item";
+      item.innerHTML = `<span class="repo-name">${escapeHtml(repo.full_name)}</span>`;
+      item.onclick = () => {
+        repoUrlInput.value = repo.clone_url;
+        branchInput.value = repo.default_branch || "main";
+      };
+      repoList.appendChild(item);
     }
+  } catch (e) {
+    repoList.innerHTML = `<div class='error'>${escapeHtml(String(e))}</div>`;
   }
+}
 
-  function selectRepo(repo: RepoInfo): void {
-    repoInput.value = repo.cloneUrl;
-    branchInput.value = repo.defaultBranch;
-    persistSettings({ repoUrl: repo.cloneUrl, branch: repo.defaultBranch });
-    addRecentRepo(repo);
+function escapeHtml(text: string): string {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+const debouncedLoadRepos = debounce((q: string) => loadRepos(q), 300);
+
+// --- Chat ---
+async function startSession(): Promise<void> {
+  const repo = repoUrlInput.value.trim();
+  const branch = branchInput.value.trim() || "main";
+  if (!repo) {
+    text(repoError, "Please select or enter a repository URL");
+    show(repoError);
+    return;
   }
+  hide(repoError);
+  startBtn.disabled = true;
+  startBtn.textContent = "Starting...";
 
-  async function startSession(): Promise<void> {
-    persistSettings({ repoUrl: repoInput.value.trim(), branch: branchInput.value.trim() });
-
-    if (!settings.repoUrl) {
-      renderRepoSelect("Repo URL is required.");
-      return;
+  try {
+    const res = await apiFetch("/api/session/start", {
+      method: "POST",
+      body: JSON.stringify({ repoUrl: repo, branch }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || "Failed to start session");
     }
+    const { sessionId } = await res.json() as { sessionId: string };
+    persistSettings({ sessionId });
+    settings = loadSettings();
 
-    const btn = form.querySelector(".primary") as HTMLButtonElement;
-    btn.textContent = "Cloning…";
-    btn.disabled = true;
+    // Save to recent repos
+    const recent = settings.recentRepos || [];
+    const existingIndex = recent.findIndex(r => r.clone_url === repo);
+    if (existingIndex >= 0) recent.splice(existingIndex, 1);
+    recent.unshift({ full_name: repo.replace(/^.*github\.com\//, ""), clone_url: repo, default_branch: branch });
+    persistSettings({ recentRepos: recent.slice(0, 10) });
 
+    hide(repoSection);
+    show(chatSection);
+    connectWebSocket(sessionId);
+  } catch (e) {
+    text(repoError, String(e instanceof Error ? e.message : e));
+    show(repoError);
+  } finally {
+    startBtn.disabled = false;
+    startBtn.textContent = "Start Session";
+  }
+}
+
+function connectWebSocket(sessionId: string): void {
+  if (socket) {
+    try { socket.close(); } catch {}
+  }
+  
+  // Note: Browser WebSocket API doesn't support custom headers
+  // Token is passed in query param as fallback (exposed in logs/proxies)
+  // Server also accepts Authorization header for non-browser clients
+  const wsUrl = `${wsBase(settings)}/ws?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(settings.token)}`;
+  socket = new WebSocket(wsUrl);
+  
+  const messageQueue: string[] = [];
+  let isOpen = false;
+
+  socket.onopen = () => {
+    isOpen = true;
+    while (messageQueue.length) {
+      const msg = messageQueue.shift();
+      if (msg) socket.send(msg);
+    }
+    typingIndicator.classList.add("hidden");
+  };
+  
+  socket.onmessage = (ev) => {
     try {
-      const data = await apiFetch<{ sessionId: string; provider: string; model: string }>("/api/sessions", {
-        method: "POST",
-        body: JSON.stringify({ repoUrl: settings.repoUrl, branch: settings.branch || undefined }),
-      });
-      persistSettings({ sessionId: data.sessionId, provider: data.provider as Settings["provider"], model: data.model });
-      connect();
-    } catch (err) {
-      renderRepoSelect(err instanceof Error ? err.message : String(err));
+      const msg = JSON.parse(String(ev.data)) as ServerMessage;
+      handleServerMessage(msg);
+    } catch {
+      // ignore non-JSON
+    }
+  };
+  
+  socket.onerror = () => {
+    addBubble("system", "Connection error. Please refresh the page.");
+  };
+  
+  socket.onclose = () => {
+    isOpen = false;
+    socket = null;
+    typingIndicator.classList.add("hidden");
+  };
+
+  function send(obj: unknown) {
+    const json = JSON.stringify(obj);
+    if (isOpen && socket?.readyState === WebSocket.OPEN) {
+      socket.send(json);
+    } else {
+      messageQueue.push(json);
     }
   }
+
+  (window as unknown as { chatSend: (text: string) => void }).chatSend = (text: string) => {
+    send({ type: "user_message", text });
+  };
 }
 
-// ---------- Chat screen ----------
-
-function renderChat(): void {
-  app.innerHTML = "";
-
-  const messages = el("div", { className: "messages" });
-  const topbar = el(
-    "div",
-    { className: "topbar" },
-    el("div", {}, el("h1", { textContent: "CodeJustWrite" }), el("div", { className: "sub", textContent: `${settings.provider}:${settings.model}` })),
-    el("button", { className: "icon-btn", textContent: "⚙" }, onClick(openDrawer))
-  );
-  const composer = el(
-    "div",
-    { className: "composer" },
-    el("textarea", { rows: 1, placeholder: "Ask the agent to do something…" }, onKeydown(sendMessage)),
-    el("button", { textContent: "➤" }, onClick(sendMessage))
-  );
-
-  app.append(topbar, messages, composer);
-
-  function sendMessage(): void {
-    const textarea = app.querySelector(".composer textarea") as HTMLTextAreaElement;
-    const text = textarea.value.trim();
-    if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
-    addBubble("user", text);
-    socket.send(JSON.stringify({ type: "user_message", text }));
-    textarea.value = "";
+function handleServerMessage(msg: ServerMessage): void {
+  if (msg.type === "assistant_delta") {
+    if (!currentAssistantBubble) {
+      currentAssistantBubble = addBubble("assistant", "");
+    }
+    currentAssistantBubble.textContent += String(msg.text ?? "");
+    scrollToBottom();
+  } else if (msg.type === "assistant_done") {
     currentAssistantBubble = null;
+    typingIndicator.classList.add("hidden");
+  } else if (msg.type === "tool_start") {
+    addBubble("system", `Running ${String(msg.tool)}...`);
+    typingIndicator.classList.remove("hidden");
+  } else if (msg.type === "error") {
+    addBubble("system", `Error: ${String(msg.message)}`);
+    typingIndicator.classList.add("hidden");
+  } else if (msg.type === "system") {
+    addBubble("system", String(msg.text));
   }
 }
 
-function onClick(handler: () => void): void {
-  return { addEventListener: () => {} } as never;
-}
-
-function onKeydown(handler: () => void): void {
-  return {
-    addEventListener(_event: string, fn: EventListener) {
-      (this as HTMLTextAreaElement).addEventListener("keydown", (e: Event) => {
-        const ke = e as KeyboardEvent;
-        if (ke.key === "Enter" && !ke.shiftKey) {
-          e.preventDefault();
-          fn(e);
-        }
-      });
-    },
-  } as never;
+function addBubble(role: "user" | "assistant" | "system", text: string): HTMLDivElement {
+  const div = document.createElement("div");
+  div.className = `bubble ${role}`;
+  div.textContent = text;
+  chatHistory.appendChild(div);
+  scrollToBottom();
+  return div;
 }
 
 function scrollToBottom(): void {
-  const messages = document.querySelector(".messages");
-  messages?.scrollTo({ top: messages.scrollHeight });
+  chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
-function addBubble(kind: "user" | "assistant" | "system" | "error", text: string): HTMLElement {
-  const bubble = el("div", { className: `bubble ${kind}`, textContent: text });
-  document.querySelector(".messages")?.append(bubble);
-  scrollToBottom();
-  return bubble;
+function sendChat(): void {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  addBubble("user", text);
+  chatInput.value = "";
+  typingIndicator.classList.remove("hidden");
+  const sender = (window as unknown as { chatSend?: (text: string) => void }).chatSend;
+  if (sender) sender(text);
 }
 
-function addToolCard(name: string, args: unknown): HTMLElement {
-  const card = el(
-    "div",
-    { className: "tool-card" },
-    el("div", { className: "head" }, el("span", { textContent: `→ ${name}` }), el("span", { className: "status", textContent: "running…" })),
-    el("div", { className: "body", textContent: JSON.stringify(args) })
-  );
-  document.querySelector(".messages")?.append(card);
-  scrollToBottom();
-  return card;
+// --- Settings Modal ---
+function openSettings(): void {
+  providerSelect.value = settings.provider || "openai";
+  modelInput.value = settings.model || "";
+  apiKeyInput.value = settings.apiKey || "";
+  autoApproveCheck.checked = settings.autoApprove ?? false;
+  settingsModal.showModal();
 }
 
-function addConfirmCard(callId: string, question: string): void {
-  const status = el("span", { className: "status", textContent: "awaiting approval" });
-  const card = el(
-    "div",
-    { className: "tool-card" },
-    el("div", { className: "head" }, el("span", { textContent: "⚠ confirm" }), status),
-    el("div", { className: "body", textContent: question }),
-    el(
-      "div",
-      { className: "confirm-row" },
-      el("button", { className: "approve", textContent: "Approve" }, onClick(() => decide(true))),
-      el("button", { className: "deny", textContent: "Deny" }, onClick(() => decide(false)))
-    )
-  );
-  document.querySelector(".messages")?.append(card);
-  scrollToBottom();
-
-  function decide(approved: boolean): void {
-    socket?.send(JSON.stringify({ type: "tool_decision", callId, approved }));
-    status.textContent = approved ? "approved" : "denied";
-    card.querySelector(".confirm-row")?.remove();
-  }
+function closeSettings(): void {
+  settingsModal.close();
 }
 
-// ---------- Settings drawer ----------
-
-function openDrawer(): void {
-  const backdrop = el("div", { className: "drawer-backdrop" }, onClick(closeDrawer));
-  const autoApproveInput = el("input", { type: "checkbox", checked: settings.autoApprove });
-  const providerSelect = el(
-    "select", {},
-    el("option", { value: "openai", textContent: "OpenAI" }),
-    el("option", { value: "deepinfra", textContent: "DeepInfra" }),
-    el("option", { value: "openrouter", textContent: "OpenRouter" })
-  );
-  providerSelect.value = settings.provider;
-
-  const drawer = el(
-    "div",
-    { className: "drawer" },
-    el("h2", { textContent: "Settings" }),
-    el(
-      "div",
-      { className: "toggle-row" },
-      el("span", { textContent: "Auto-approve all actions" }),
-      el("label", { className: "switch" }, autoApproveInput, el("span", { className: "slider" }))
-    ),
-    el("label", {}, "Provider", providerSelect),
-    el("label", {}, "Model", el("input", { value: settings.model })),
-    el("div", { className: "sub", textContent: `Repo: ${settings.repoUrl}` }),
-    el("button", { className: "danger-btn", textContent: "End session" }, onClick(endSession))
-  );
-
-  backdrop.addEventListener("click", closeDrawer);
-  autoApproveInput.addEventListener("change", () => {
-    persistSettings({ autoApprove: autoApproveInput.checked });
-    socket?.send(JSON.stringify({ type: "set_auto_approve", value: settings.autoApprove }));
+function saveSettings(): void {
+  persistSettings({
+    provider: providerSelect.value as Settings["provider"],
+    model: modelInput.value,
+    apiKey: apiKeyInput.value,
+    autoApprove: autoApproveCheck.checked,
   });
-  providerSelect.addEventListener("change", () => {
-    persistSettings({ provider: providerSelect.value as Settings["provider"] });
-    socket?.send(JSON.stringify({ type: "set_provider", provider: settings.provider }));
-  });
+  settings = loadSettings();
+  settingsModal.close();
+}
 
-  const modelInput = drawer.querySelector('input[type="text"]') as HTMLInputElement;
-  modelInput.addEventListener("change", () => {
-    persistSettings({ model: modelInput.value.trim() });
-    socket?.send(JSON.stringify({ type: "set_model", model: settings.model }));
-  });
+// --- Init ---
+function init(): void {
+  // Load saved settings
+  serverInput.value = settings.serverUrl || "";
+  tokenInput.value = settings.token || "";
 
-  document.body.append(backdrop, drawer);
-
-  function closeDrawer(): void {
-    backdrop.remove();
-    drawer.remove();
+  // If already has session, go to chat
+  if (settings.sessionId) {
+    show(chatSection);
+    hide(signInSection);
+    hide(repoSection);
+    connectWebSocket(settings.sessionId);
+  } else if (settings.token) {
+    showRepoSection();
+    hide(signInSection);
+  } else {
+    show(signInSection);
+    hide(repoSection);
+    hide(chatSection);
   }
 
-  async function endSession(): Promise<void> {
-    if (settings.sessionId) {
-      await apiFetch(`/api/sessions/${settings.sessionId}`, { method: "DELETE" }).catch(() => {});
-    }
-    persistSettings({ sessionId: "" });
-    socket?.close();
-    renderRepoSelect();
-  }
-}
-
-// ---------- WebSocket ----------
-
-function connect(): void {
-  renderChat();
-  socket = new WebSocket(`${wsBase(settings)}/ws?sessionId=${encodeURIComponent(settings.sessionId)}&token=${encodeURIComponent(settings.token)}`);
-
-  socket.addEventListener("message", (event) => {
-    let msg: Record<string, unknown>;
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-
-    switch (msg.type) {
-      case "state":
-        persistSettings({ provider: msg.provider as Settings["provider"], model: String(msg.model) });
-        (document.querySelector(".topbar .sub") as HTMLElement).textContent = `${settings.provider}:${settings.model}`;
-        break;
-      case "assistant_delta":
-        currentAssistantBubble ??= addBubble("assistant", "");
-        currentAssistantBubble.textContent += String(msg.text ?? "");
-        scrollToBottom();
-        break;
-      case "assistant_done":
-        currentAssistantBubble = null;
-        break;
-      case "tool_call":
-        lastToolCard = addToolCard(String(msg.name), msg.args);
-        break;
-      case "tool_result":
-        if (lastToolCard) {
-          const status = lastToolCard.querySelector(".status");
-          const body = lastToolCard.querySelector(".body");
-          if (status) {
-            status.textContent = msg.error ? "error" : "done";
-            status.className = `status ${msg.error ? "err" : "ok"}`;
-          }
-          if (body) body.textContent += `\n\n${String(msg.result ?? "")}`;
-        }
-        break;
-      case "diff":
-        lastToolCard?.querySelector(".body")!.textContent += `\n\n${String(msg.text ?? "")}`;
-        break;
-      case "awaiting_confirmation":
-        addConfirmCard(String(msg.callId), String(msg.question ?? "Allow this action?"));
-        break;
-      case "error":
-        addBubble("error", String(msg.message ?? "Unknown error"));
-        break;
+  // Event listeners
+  continueBtn.addEventListener("click", handleSignIn);
+  serverInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleSignIn();
+  });
+  tokenInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleSignIn();
+  });
+  
+  startBtn.addEventListener("click", startSession);
+  repoSearch.addEventListener("input", (e) => {
+    const target = e.target as HTMLInputElement;
+    debouncedLoadRepos(target.value);
+  });
+  browseBtn.addEventListener("click", () => show(repoSection));
+  
+  sendBtn.addEventListener("click", sendChat);
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
     }
   });
-
-  socket.addEventListener("close", () => addBubble("system", "Disconnected. Reload to reconnect."));
-  socket.addEventListener("error", () => addBubble("error", "Connection error."));
+  
+  settingsBtn.addEventListener("click", openSettings);
+  saveSettingsBtn.addEventListener("click", saveSettings);
+  closeSettingsBtn.addEventListener("click", closeSettings);
+  settingsModal.addEventListener("click", (e) => {
+    if (e.target === settingsModal) closeSettings();
+  });
+  
+  signOutBtn.addEventListener("click", () => {
+    persistSettings({ sessionId: "", token: "", recentRepos: [] });
+    settings = loadSettings();
+    if (socket) {
+      socket.close();
+      socket = null;
+    }
+    show(signInSection);
+    hide(repoSection);
+    hide(chatSection);
+    repoUrlInput.value = "";
+    branchInput.value = "";
+  });
 }
 
-// ---------- Boot ----------
-
-if (settings.sessionId) {
-  connect();
-} else if (settings.token) {
-  renderRepoSelect();
-} else {
-  renderSignIn();
-}
+init();
