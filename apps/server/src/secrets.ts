@@ -51,3 +51,4 @@ export function getSecret(name: string): string | undefined {
   const envVar = `CJW_${name.toUpperCase()}`;
   return process.env[envVar];
 }
+}

@@ -69,3 +69,4 @@ export function requireToken(authToken: string | undefined) {
     res.status(401).json({ error: "Unauthorized" });
   };
 }
+}
