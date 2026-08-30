@@ -12,9 +12,9 @@ const program = new Command();
 program
   .name("cjw")
   .description(
-    "CodeJustWrite — terminal AI coding agent (DeepInfra/OpenAI) with git, PR automation, and a testing sandbox."
+    "CodeJustWrite — terminal AI coding agent (DeepInfra/OpenRouter) with git, PR automation, and a testing sandbox."
   )
-  .option("--provider <name>", "LLM provider to start with: openai | deepinfra")
+  .option("--provider <name>", "LLM provider to start with: deepinfra | openrouter")
   .option("--model <name>", "Model to start with")
   .action(async (opts: { provider?: string; model?: string }) => {
     const config = loadConfig();

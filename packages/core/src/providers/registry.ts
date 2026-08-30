@@ -15,12 +15,7 @@ export class ProviderRegistry {
     if (cached) return cached;
 
     let provider: LLMProvider;
-    if (providerName === "openai") {
-      if (!this.cfg.openaiApiKey) {
-        throw new Error("OPENAI_API_KEY is not set. Add it to your .env to use the openai provider.");
-      }
-      provider = createOpenAICompatibleProvider({ name: "openai", apiKey: this.cfg.openaiApiKey });
-    } else if (providerName === "deepinfra") {
+    if (providerName === "deepinfra") {
       if (!this.cfg.deepinfraApiKey) {
         throw new Error("DEEPINFRA_KEY is not set. Add it to your .env to use the deepinfra provider.");
       }

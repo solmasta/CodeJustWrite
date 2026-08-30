@@ -16,7 +16,7 @@ describe("settings", () => {
       const settings = loadSettings();
       expect(settings.serverUrl).toBe("");
       expect(settings.token).toBe("");
-      expect(settings.provider).toBe("openai");
+      expect(settings.provider).toBe("deepinfra");
       expect(settings.recentRepos).toEqual([]);
     });
 

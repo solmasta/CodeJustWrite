@@ -9,7 +9,7 @@ export interface Settings {
   token: string;
   repoUrl: string;
   branch: string;
-  provider: "openai" | "deepinfra" | "openrouter";
+  provider: "deepinfra" | "openrouter";
   model: string;
   autoApprove: boolean;
   recentRepos: RepoInfo[];

@@ -37,7 +37,7 @@ export class Session {
   ) {
     this.provider = config.provider;
     this.model = config.model;
-    this.secrets = [config.githubToken, config.openaiApiKey, config.deepinfraApiKey, config.openrouterApiKey].filter(
+    this.secrets = [config.githubToken, config.deepinfraApiKey, config.openrouterApiKey].filter(
       (s): s is string => !!s
     );
 

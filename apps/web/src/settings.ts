@@ -8,8 +8,8 @@ const defaults: Settings = {
   token: "",
   repoUrl: "",
   branch: "",
-  provider: "openai",
-  model: "gpt-4o",
+  provider: "deepinfra",
+  model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
   autoApprove: false,
   recentRepos: [],
 };

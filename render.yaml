@@ -10,8 +10,6 @@ services:
     envVars:
       - key: CJW_AUTH_TOKEN
         sync: false # set to a long random secret in the Render dashboard
-      - key: OPENAI_API_KEY
-        sync: false
       - key: DEEPINFRA_KEY
         sync: false
       - key: OPENROUTER_KEY
@@ -19,7 +17,7 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       - key: CJW_DEFAULT_PROVIDER
-        value: openai
+        value: deepinfra
       - key: CJW_SESSION_TTL_MIN
         value: "120"
       - key: CJW_MAX_SESSIONS
