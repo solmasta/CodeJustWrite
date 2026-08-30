@@ -1,11 +1,12 @@
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { SessionManager } from "./session";
-import { withAuth, requireToken, TokenData } from "./auth";
-import { getSecret } from "./secrets";
+import { SessionManager } from "./session.js";
+import { withAuth, requireToken, TokenData } from "./auth.js";
+import { getSecret } from "./secrets.js";
 import { createServer } from "http";
 import { resolve } from "path";
-import { existsSync, totalmem, freemem } from "fs";
+import { existsSync } from "fs";
+import { totalmem, freemem } from "os";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 
