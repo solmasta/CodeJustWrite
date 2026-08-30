@@ -3,7 +3,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { SessionManager, Session, CjwConfig } from "@codejustwrite/core";
+import { loadConfig, type CjwConfig, type ProviderName } from "@codejustwrite/core";
+import { SessionManager, Session } from "./session.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,15 +17,8 @@ const WORKSPACES_DIR = "/tmp/cjw-workspaces";
 const SESSION_TTL_MINUTES = 60;
 const MAX_SESSIONS = 50;
 
-const config: CjwConfig = {
-  provider: (process.env.LLM_PROVIDER || "openai") as "openai" | "deepinfra" | "openrouter",
-  model: process.env.LLM_MODEL || "gpt-4o-mini",
-  apiKey: process.env.LLM_API_KEY || "",
-  baseUrl: process.env.LLM_BASE_URL,
-  maxTokens: parseInt(process.env.LLM_MAX_TOKENS || "4096", 10),
-  temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
-  shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || "120", 10),
-};
+// Load config from environment using the core's loadConfig function
+const config = loadConfig();
 
 const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
 
@@ -98,15 +92,14 @@ app.get("/api/health", (req, res) => {
 // List repositories
 app.get("/api/repos", async (req: Request, res: Response) => {
   try {
-    const token = req.headers.authorization?.replace("Bearer ", "");
-    if (!process.env.GITHUB_TOKEN) {
+    if (!config.githubToken) {
       res.status(500).json({ error: "GitHub token not configured" });
       return;
     }
     
     const response = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
       headers: {
-        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        Authorization: `Bearer ${config.githubToken}`,
         Accept: "application/vnd.github.v3+json"
       }
     });
@@ -116,7 +109,14 @@ app.get("/api/repos", async (req: Request, res: Response) => {
       return;
     }
     
-    const repos: Array<{ id: number; name: string; full_name: string; html_url: string; description: string | null; updated_at: string }> = await response.json() as Array<{ id: number; name: string; full_name: string; html_url: string; description: string | null; updated_at: string }>;
+    const repos = await response.json() as Array<{
+      id: number;
+      name: string;
+      full_name: string;
+      html_url: string;
+      description: string | null;
+      updated_at: string;
+    }>;
     const result = repos.map(repo => ({
       id: repo.id,
       name: repo.name,
@@ -192,13 +192,13 @@ wss.on("connection", async (ws: WebSocket, req) => {
     wsLimit.count++;
   }
 
-  let session: Session;
-  try {
-    session = sessions.get(sessionId);
-  } catch {
+  const session = sessions.get(sessionId);
+  if (!session) {
     ws.close(1008, "Invalid session");
     return;
   }
+
+  session.attach(ws);
 
   const messageQueue: string[] = [];
   let isConnected = true;
@@ -208,7 +208,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === "user_message") {
-        await session.sendUserMessage(msg.text);
+        await session.handleUserMessage(msg.text);
       }
     } catch (e) {
       console.error("WebSocket message error:", e);
@@ -217,7 +217,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
 
   ws.on("close", () => {
     isConnected = false;
-    sessions.release(sessionId);
+    session.detach(ws);
   });
 
   ws.on("error", (err) => {
