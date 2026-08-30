@@ -17,8 +17,6 @@ const WORKSPACES_DIR = "/tmp/cjw-workspaces";
 const SESSION_TTL_MINUTES = 60;
 const MAX_SESSIONS = 50;
 
-// Load config from environment using the core's loadConfig function
-// This uses: CJW_DEFAULT_PROVIDER, CJW_DEFAULT_MODEL, OPENAI_API_KEY, DEEPINFRA_KEY, OPENROUTER_KEY, GITHUB_TOKEN, CJW_SHELL_TIMEOUT_SEC
 const config = loadConfig();
 
 const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
