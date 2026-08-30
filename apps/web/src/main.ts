@@ -1,17 +1,7 @@
-import type { ServerMessage, Settings } from "./types";
-import { loadSettings, persistSettings } from "./settings";
-import { createConnection } from "./connection";
-import {
-  el,
-  apiFetch,
-  escapeHtml,
-  isValidUrl,
-  show,
-  hide,
-  text,
-  debounce,
-  formatDuration,
-} from "./utils";
+import type { ServerMessage, Settings } from "./types.js";
+import { loadSettings, persistSettings } from "./settings.js";
+import { createConnection } from "./connection.js";
+import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
 
 // --- DOM refs ---
 const signInSection = el<HTMLDivElement>("#signInSection");
@@ -29,17 +19,17 @@ const startBtn = el<HTMLButtonElement>("#startBtn");
 const browseBtn = el<HTMLButtonElement>("#browseBtn");
 const repoError = el<HTMLParagraphElement>("#repoError");
 
+const repoSub = el<HTMLDivElement>("#repoSub");
 const chatHistory = el<HTMLDivElement>("#chatHistory");
-const chatInput = el<HTMLInputElement>("#chatInput");
+const chatInput = el<HTMLTextAreaElement>("#chatInput");
 const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
-const connectionStatus = el<HTMLDivElement>("#connectionStatus");
+const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
 const modelInput = el<HTMLInputElement>("#model");
-const apiKeyInput = el<HTMLInputElement>("#apiKey");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
@@ -53,6 +43,7 @@ const recentReposList = el<HTMLDivElement>("#recentReposList");
 // --- State ---
 let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
+let lastToolCard: HTMLDivElement | null = null;
 let settings: Settings = loadSettings();
 let isProcessing = false;
 
@@ -60,27 +51,27 @@ let isProcessing = false;
 async function handleSignIn(): Promise<void> {
   const serverUrl = serverInput.value.trim();
   const token = tokenInput.value.trim();
-  
+
   if (serverUrl && !isValidUrl(serverUrl)) {
     text(signInError, "Please enter a valid URL (http:// or https://)");
     show(signInError);
     return;
   }
-  
+
   continueBtn.disabled = true;
-  text(signInError, "Connecting...");
+  text(signInError, "Connecting…");
   show(signInError);
-  
+
   try {
+    persistSettings({ serverUrl, token });
+    settings = loadSettings();
     const res = await apiFetch(settings, "/api/auth/status");
     if (!res.ok) {
       const err = await res.text().catch(() => "Unknown error");
       throw new Error(err || "Invalid token");
     }
-    persistSettings({ serverUrl, token });
-    settings = loadSettings();
     hide(signInError);
-    showRepoSection();
+    await showRepoSection();
   } catch (e) {
     text(signInError, String(e instanceof Error ? e.message : e));
     show(signInError);
@@ -93,11 +84,11 @@ async function handleSignIn(): Promise<void> {
 async function showRepoSection(): Promise<void> {
   hide(signInSection);
   show(repoSection);
-  await loadRecentRepos();
+  loadRecentRepos();
   await loadRepos("");
 }
 
-async function loadRecentRepos(): Promise<void> {
+function loadRecentRepos(): void {
   const recent = settings.recentRepos || [];
   if (recent.length === 0) {
     hide(recentReposSection);
@@ -118,11 +109,12 @@ async function loadRecentRepos(): Promise<void> {
 }
 
 async function loadRepos(query: string): Promise<void> {
-  repoList.innerHTML = "<div class='loading'>Loading repositories...</div>";
+  repoList.innerHTML = "<div class='loading'>Loading repositories…</div>";
   try {
     const res = await apiFetch(settings, `/api/github/repos?q=${encodeURIComponent(query)}`);
-    if (!res.ok) throw new Error("Failed to load repositories");
-    const repos = await res.json() as Array<{ full_name: string; clone_url: string; default_branch?: string }>;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load repositories");
+    const repos = data.repos as { full_name: string; clone_url: string; default_branch?: string }[];
     repoList.innerHTML = "";
     if (repos.length === 0) {
       repoList.innerHTML = "<div class='empty'>No repositories found</div>";
@@ -139,11 +131,11 @@ async function loadRepos(query: string): Promise<void> {
       repoList.appendChild(item);
     }
   } catch (e) {
-    repoList.innerHTML = `<div class='error'>${escapeHtml(String(e))}</div>`;
+    repoList.innerHTML = `<div class='error'>${escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
   }
 }
 
-const debouncedLoadRepos = debounce((q: string) => loadRepos(q), 300);
+const debouncedLoadRepos = debounce((q: unknown) => void loadRepos(String(q)), 300);
 
 // --- Chat ---
 async function startSession(): Promise<void> {
@@ -156,32 +148,30 @@ async function startSession(): Promise<void> {
   }
   hide(repoError);
   startBtn.disabled = true;
-  startBtn.textContent = "Starting...";
+  startBtn.textContent = "Starting…";
 
   try {
     const res = await apiFetch(settings, "/api/session/start", {
       method: "POST",
       body: JSON.stringify({ repoUrl: repo, branch }),
     });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || "Failed to start session");
-    }
-    const { sessionId } = await res.json() as { sessionId: string };
-    persistSettings({ sessionId });
-    settings = loadSettings();
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to start session");
+    const sessionId = data.sessionId as string;
 
     // Save to recent repos
     const recent = settings.recentRepos || [];
-    const existingIndex = recent.findIndex(r => r.clone_url === repo);
+    const existingIndex = recent.findIndex((r) => r.clone_url === repo);
     if (existingIndex >= 0) recent.splice(existingIndex, 1);
-    recent.unshift({ 
-      full_name: repo.replace(/^.*github\.com\//, ""), 
-      clone_url: repo, 
-      default_branch: branch 
+    recent.unshift({
+      full_name: repo.replace(/^.*github\.com\//, "").replace(/\.git$/, ""),
+      clone_url: repo,
+      default_branch: branch,
     });
-    persistSettings({ recentRepos: recent.slice(0, 10) });
+    persistSettings({ sessionId, recentRepos: recent.slice(0, 10) });
+    settings = loadSettings();
 
+    repoSub.textContent = recent[0].full_name;
     hide(repoSection);
     show(chatSection);
     connectWebSocket(sessionId);
@@ -194,40 +184,40 @@ async function startSession(): Promise<void> {
   }
 }
 
+async function endSession(): Promise<void> {
+  if (!settings.sessionId) return;
+  await apiFetch(settings, `/api/session/${settings.sessionId}`, { method: "DELETE" }).catch(() => {});
+}
+
 function connectWebSocket(sessionId: string): void {
   connection?.close();
-  
+
   connection = createConnection(sessionId, settings, (status) => {
     connectionStatus.className = `connection-status ${status}`;
     connectionStatus.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-    
+
     if (status === "connected") {
       typingIndicator.classList.add("hidden");
     } else if (status === "disconnected") {
-      addBubble("system", "Connection lost. Attempting to reconnect...");
+      addBubble("system", "Connection lost. Attempting to reconnect…");
     }
   });
-  
+
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
-  connection.onOpen(() => {
-    // Clear any reconnection messages
-  });
-  connection.onClose(() => {
-    typingIndicator.classList.add("hidden");
-    isProcessing = false;
-  });
-  
-  (window as unknown as { chatSend: (text: string) => void }).chatSend = (text: string) => {
-    connection?.send({ type: "user_message", text });
-  };
 }
 
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
-    case "assistant_delta": {
-      if (!currentAssistantBubble) {
-        currentAssistantBubble = addBubble("assistant", "");
+    case "state": {
+      if (msg.provider) {
+        settings.provider = msg.provider as Settings["provider"];
+        settings.model = msg.model ?? settings.model;
+        persistSettings({ provider: settings.provider, model: settings.model });
       }
+      break;
+    }
+    case "assistant_delta": {
+      if (!currentAssistantBubble) currentAssistantBubble = addBubble("assistant", "");
       currentAssistantBubble.textContent += String(msg.text ?? "");
       scrollToBottom();
       break;
@@ -238,35 +228,88 @@ function handleServerMessage(msg: ServerMessage): void {
       isProcessing = false;
       break;
     }
-    case "tool_start": {
-      addBubble("system", `Running ${String(msg.tool)}...`);
+    case "tool_call": {
+      lastToolCard = addToolCard(String(msg.name), msg.args);
       typingIndicator.classList.remove("hidden");
       break;
     }
+    case "tool_result": {
+      const card = lastToolCard;
+      if (card) {
+        const status = card.querySelector(".status");
+        const body = card.querySelector(".body");
+        if (status) {
+          status.textContent = msg.error ? "error" : "done";
+          status.className = `status ${msg.error ? "err" : "ok"}`;
+        }
+        if (body) body.textContent += `\n\n${String(msg.result ?? "")}`;
+      }
+      break;
+    }
+    case "diff": {
+      if (lastToolCard) {
+        const body = lastToolCard.querySelector(".body");
+        if (body) body.textContent += `\n\n${String(msg.text ?? "")}`;
+      }
+      break;
+    }
+    case "awaiting_confirmation": {
+      addConfirmCard(String(msg.callId), String(msg.question ?? "Allow this action?"));
+      break;
+    }
     case "error": {
-      addBubble("system", `Error: ${String(msg.message)}`);
+      addBubble("system", `Error: ${String(msg.message ?? "Unknown error")}`);
       typingIndicator.classList.add("hidden");
       isProcessing = false;
-      break;
-    }
-    case "system": {
-      addBubble("system", String(msg.text));
-      break;
-    }
-    case "state": {
-      // Handle state updates
       break;
     }
   }
 }
 
-function addBubble(role: "user" | "assistant" | "system", text: string): HTMLDivElement {
+function addBubble(role: "user" | "assistant" | "system", content: string): HTMLDivElement {
   const div = document.createElement("div");
   div.className = `bubble ${role}`;
-  div.textContent = text;
+  div.textContent = content;
   chatHistory.appendChild(div);
   scrollToBottom();
   return div;
+}
+
+function addToolCard(name: string, args: unknown): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "tool-card";
+  card.innerHTML = `
+    <div class="head"><span>→ ${escapeHtml(name)}</span><span class="status">running…</span></div>
+    <div class="body">${escapeHtml(JSON.stringify(args))}</div>
+  `;
+  chatHistory.appendChild(card);
+  scrollToBottom();
+  return card;
+}
+
+function addConfirmCard(callId: string, question: string): void {
+  const card = document.createElement("div");
+  card.className = "tool-card";
+  card.innerHTML = `
+    <div class="head"><span>⚠ confirm</span><span class="status">awaiting approval</span></div>
+    <div class="body">${escapeHtml(question)}</div>
+    <div class="confirm-row">
+      <button type="button" class="approve">Approve</button>
+      <button type="button" class="deny">Deny</button>
+    </div>
+  `;
+  chatHistory.appendChild(card);
+  scrollToBottom();
+
+  const status = card.querySelector(".status") as HTMLElement;
+  const row = card.querySelector(".confirm-row") as HTMLElement;
+  const decide = (approved: boolean) => {
+    connection?.send({ type: "tool_decision", callId, approved });
+    status.textContent = approved ? "approved" : "denied";
+    row.remove();
+  };
+  card.querySelector(".approve")?.addEventListener("click", () => decide(true));
+  card.querySelector(".deny")?.addEventListener("click", () => decide(false));
 }
 
 function scrollToBottom(): void {
@@ -275,21 +318,19 @@ function scrollToBottom(): void {
 
 function sendChat(): void {
   if (isProcessing) return;
-  const text = chatInput.value.trim();
-  if (!text) return;
-  addBubble("user", text);
+  const message = chatInput.value.trim();
+  if (!message) return;
+  addBubble("user", message);
   chatInput.value = "";
   typingIndicator.classList.remove("hidden");
   isProcessing = true;
-  const sender = (window as unknown as { chatSend?: (text: string) => void }).chatSend;
-  if (sender) sender(text);
+  connection?.send({ type: "user_message", text: message });
 }
 
 // --- Settings Modal ---
 function openSettings(): void {
   providerSelect.value = settings.provider || "openai";
   modelInput.value = settings.model || "";
-  apiKeyInput.value = settings.apiKey || "";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   settingsModal.showModal();
 }
@@ -299,30 +340,33 @@ function closeSettings(): void {
 }
 
 function saveSettings(): void {
-  persistSettings({
-    provider: providerSelect.value as Settings["provider"],
-    model: modelInput.value,
-    apiKey: apiKeyInput.value,
-    autoApprove: autoApproveCheck.checked,
-  });
+  const provider = providerSelect.value as Settings["provider"];
+  const model = modelInput.value;
+  const autoApprove = autoApproveCheck.checked;
+
+  persistSettings({ provider, model, autoApprove });
   settings = loadSettings();
+
+  if (connection) {
+    if (provider !== settings.provider) connection.send({ type: "set_provider", provider });
+    connection.send({ type: "set_model", model });
+    connection.send({ type: "set_auto_approve", value: autoApprove });
+  }
   settingsModal.close();
 }
 
 // --- Init ---
 function init(): void {
-  // Load saved settings
   serverInput.value = settings.serverUrl || "";
   tokenInput.value = settings.token || "";
 
-  // If already has session, go to chat
   if (settings.sessionId) {
     show(chatSection);
     hide(signInSection);
     hide(repoSection);
     connectWebSocket(settings.sessionId);
   } else if (settings.token) {
-    showRepoSection();
+    void showRepoSection();
     hide(signInSection);
   } else {
     show(signInSection);
@@ -330,22 +374,20 @@ function init(): void {
     hide(chatSection);
   }
 
-  // Event listeners
-  continueBtn.addEventListener("click", handleSignIn);
+  continueBtn.addEventListener("click", () => void handleSignIn());
   serverInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleSignIn();
+    if (e.key === "Enter") void handleSignIn();
   });
   tokenInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleSignIn();
+    if (e.key === "Enter") void handleSignIn();
   });
-  
-  startBtn.addEventListener("click", startSession);
+
+  startBtn.addEventListener("click", () => void startSession());
   repoSearch.addEventListener("input", (e) => {
-    const target = e.target as HTMLInputElement;
-    debouncedLoadRepos(target.value);
+    debouncedLoadRepos((e.target as HTMLInputElement).value);
   });
-  browseBtn.addEventListener("click", () => show(repoSection));
-  
+  browseBtn.addEventListener("click", () => void loadRepos(repoSearch.value));
+
   sendBtn.addEventListener("click", sendChat);
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -353,15 +395,16 @@ function init(): void {
       sendChat();
     }
   });
-  
+
   settingsBtn.addEventListener("click", openSettings);
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });
-  
+
   signOutBtn.addEventListener("click", () => {
+    void endSession();
     connection?.close();
     connection = null;
     persistSettings({ sessionId: "", token: "", recentRepos: [] });

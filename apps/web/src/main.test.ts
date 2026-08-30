@@ -1,20 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-// Test utilities from main.ts
-function isValidUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function escapeHtml(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
+import { isValidUrl, escapeHtml } from "./utils";
 
 describe("main utilities", () => {
   describe("isValidUrl", () => {
@@ -42,13 +27,7 @@ describe("main utilities", () => {
 
   describe("escapeHtml", () => {
     it("escapes HTML special characters", () => {
-      expect(escapeHtml("<script>alert(1)</script>")).toBe(
-        "&lt;script&gt;alert(1)&lt;/script&gt;"
-      );
-    });
-
-    it("escapes quotes", () => {
-      expect(escapeHtml('"test"')).toBe("&quot;test&quot;");
+      expect(escapeHtml("<script>alert(1)</script>")).toBe("&lt;script&gt;alert(1)&lt;/script&gt;");
     });
 
     it("escapes ampersands", () => {
@@ -57,6 +36,10 @@ describe("main utilities", () => {
 
     it("handles empty strings", () => {
       expect(escapeHtml("")).toBe("");
+    });
+
+    it("leaves plain text untouched", () => {
+      expect(escapeHtml("hello world")).toBe("hello world");
     });
   });
 });

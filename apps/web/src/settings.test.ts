@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { loadSettings, persistSettings, debounce } from "./settings";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { loadSettings, persistSettings } from "./settings";
+import { debounce } from "./utils";
 
 describe("settings", () => {
   beforeEach(() => {
@@ -21,7 +22,7 @@ describe("settings", () => {
 
     it("loads settings from localStorage", () => {
       localStorage.setItem(
-        "cjw-settings",
+        "cjw.settings",
         JSON.stringify({ serverUrl: "http://localhost:3000", token: "test-token" })
       );
       const settings = loadSettings();
@@ -30,7 +31,7 @@ describe("settings", () => {
     });
 
     it("ignores invalid JSON in localStorage", () => {
-      localStorage.setItem("cjw-settings", "invalid json");
+      localStorage.setItem("cjw.settings", "invalid json");
       const settings = loadSettings();
       expect(settings.serverUrl).toBe("");
       expect(settings.token).toBe("");
