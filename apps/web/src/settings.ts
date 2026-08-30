@@ -1,5 +1,11 @@
+export interface RepoInfo {
+  full_name: string;
+  clone_url: string;
+  default_branch?: string;
+}
+
 export interface Settings {
-  serverUrl: string; // empty = same origin as the page
+  serverUrl: string;
   token: string;
   repoUrl: string;
   branch: string;
@@ -7,6 +13,7 @@ export interface Settings {
   model: string;
   autoApprove: boolean;
   sessionId: string;
+  recentRepos: RepoInfo[];
 }
 
 const KEY = "cjw.settings";
@@ -17,9 +24,10 @@ const defaults: Settings = {
   repoUrl: "",
   branch: "",
   provider: "openai",
-  model: "gpt-4.1",
+  model: "gpt-4o",
   autoApprove: false,
   sessionId: "",
+  recentRepos: [],
 };
 
 export function loadSettings(): Settings {
@@ -32,22 +40,32 @@ export function loadSettings(): Settings {
   }
 }
 
-export function saveSettings(settings: Settings): void {
+export function persistSettings(partial: Partial<Settings>): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(settings));
+    const current = loadSettings();
+    const updated = { ...current, ...partial };
+    localStorage.setItem(KEY, JSON.stringify(updated));
   } catch {
     // localStorage unavailable (private mode, etc.) — settings just won't persist.
   }
 }
 
+export function debounce<T extends (...args: unknown[]) => void>(
+  fn: T,
+  delay: number
+): (...args: Parameters<T>) => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
 export function httpBase(settings: Settings): string {
-  return settings.serverUrl.replace(/\/$/, "");
+  return (settings.serverUrl || location.origin).replace(/\/$/, "");
 }
 
 export function wsBase(settings: Settings): string {
-  if (settings.serverUrl) {
-    return settings.serverUrl.replace(/^http/, "ws").replace(/\/$/, "");
-  }
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}`;
+  const base = httpBase(settings);
+  return base.replace(/^http/, "ws");
 }
