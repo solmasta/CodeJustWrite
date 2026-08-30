@@ -24,21 +24,20 @@ app.use(express.json({ limit: "100kb" }));
 const AUTH_TOKEN = process.env.CJW_AUTH_TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-// Configuration for SessionManager
-const WORKSPACES_DIR = '/tmp/cjw-workspaces';
-const SESSION_TTL_MS = 60 * 60 * 1000;
+// Configuration
+const WORKSPACES_DIR = "/tmp/cjw-workspaces";
+const SESSION_TTL_MINUTES = 60;
 const MAX_SESSIONS = 50;
 
 const config = {
-  provider: (process.env.LLM_PROVIDER || 'openai') as 'openai' | 'deepinfra' | 'openrouter',
-  model: process.env.LLM_MODEL || 'gpt-4o-mini',
-  apiKey: process.env.OPENAI_API_KEY || process.env.DEEPINFRA_API_KEY || process.env.OPENROUTER_API_KEY || '',
-  shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || '30', 10),
-  maxOutputChars: parseInt(process.env.MAX_OUTPUT_CHARS || '50000', 10),
+  provider: (process.env.LLM_PROVIDER || "openai") as "openai" | "deepinfra" | "openrouter",
+  model: process.env.LLM_MODEL || "gpt-4o-mini",
+  apiKey: process.env.LLM_API_KEY || "",
+  baseUrl: process.env.LLM_BASE_URL,
+  maxTokens: parseInt(process.env.LLM_MAX_TOKENS || "4096", 10),
+  temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
+  shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || "120", 10),
 };
-
-// Session manager with 4 required arguments
-const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MS, MAX_SESSIONS);
 
 // Structured logging
 function log(level: string, type: string, data: Record<string, unknown> = {}): void {
@@ -117,6 +116,8 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
 
 // Enhanced health check endpoint
 app.get("/api/health", async (_req, res) => {
