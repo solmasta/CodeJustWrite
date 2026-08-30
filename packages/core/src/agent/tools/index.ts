@@ -4,8 +4,11 @@ import {
   gitStatusTool,
   gitDiffTool,
   gitCreateBranchTool,
+  gitFetchTool,
+  gitCheckoutTool,
   gitCommitTool,
   gitMergeTool,
+  gitMergeAbortTool,
   gitPushTool,
 } from "./git.js";
 import { createPullRequestTool } from "./github.js";
@@ -22,8 +25,11 @@ export const allTools: ToolDefinition[] = [
   gitStatusTool,
   gitDiffTool,
   gitCreateBranchTool,
+  gitFetchTool,
+  gitCheckoutTool,
   gitCommitTool,
   gitMergeTool,
+  gitMergeAbortTool,
   gitPushTool,
   createPullRequestTool,
   runTestsTool,

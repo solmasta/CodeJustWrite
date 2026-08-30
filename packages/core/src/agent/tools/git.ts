@@ -13,13 +13,16 @@ async function git(repoRoot: string, args: string[], timeoutSec = 30): Promise<G
 }
 
 function sanitizeBranch(name: string): string {
-  // Strict branch name validation: alphanumeric, dots, hyphens, underscores, slashes
-  const sanitized = name.replace(/[^a-zA-Z0-9._/-]/g, "");
+  // Strict branch name validation: alphanumeric, dots, hyphens, underscores, slashes.
+  // Reject anything containing a disallowed character instead of silently
+  // stripping it — stripping would let a mistyped or adversarial name
+  // silently resolve to a different, unintended branch.
+  if (!/^[a-zA-Z0-9._/-]+$/.test(name)) return "";
   // Reject branch names that look like paths or refs
-  if (sanitized.startsWith("/") || sanitized.startsWith("-") || sanitized.includes("..")) {
+  if (name.startsWith("/") || name.startsWith("-") || name.includes("..")) {
     return "";
   }
-  return sanitized;
+  return name;
 }
 
 function validatePath(path: string): string {
@@ -93,6 +96,84 @@ export const gitCreateBranchTool: ToolDefinition = {
   },
 };
 
+export const gitFetchTool: ToolDefinition = {
+  spec: {
+    name: "git_fetch",
+    description:
+      "Fetch a branch from origin so it can be checked out or merged. Sessions may start with only " +
+      "one branch present locally, so call this before git_checkout or git_merge on any branch that " +
+      "isn't already local (git_status/git_diff won't show a branch that hasn't been fetched yet).",
+    parameters: {
+      type: "object",
+      properties: {
+        branch: { type: "string", description: "Branch to fetch from origin." },
+      },
+      required: ["branch"],
+    },
+  },
+  async run(args, ctx) {
+    const branch = sanitizeBranch(String(args.branch));
+    if (!branch) throw new Error("Invalid branch name");
+    // Fetch with an explicit destination refspec: a single-branch clone
+    // narrows the repo's configured remote.origin.fetch refspec to just the
+    // branch it was cloned with, so a plain `git fetch origin <branch>`
+    // would land only in FETCH_HEAD and never create the origin/<branch>
+    // tracking ref that git_checkout/git_merge need.
+    const result = await git(
+      ctx.repoRoot,
+      ["fetch", "origin", `${branch}:refs/remotes/origin/${branch}`],
+      60
+    );
+    checkGitSuccess(result);
+    return result.stderr || result.stdout || `Fetched origin/${branch}`;
+  },
+};
+
+export const gitCheckoutTool: ToolDefinition = {
+  spec: {
+    name: "git_checkout",
+    description:
+      "Switch the working tree to an existing branch (a local branch, or a fetched origin/<branch> — " +
+      "run git_fetch first if it isn't local yet). Use this to get back to the base branch before " +
+      "merging a feature branch into it; git_create_branch only ever creates a new branch.",
+    parameters: {
+      type: "object",
+      properties: {
+        branch: { type: "string", description: "Branch to switch to." },
+      },
+      required: ["branch"],
+    },
+  },
+  requiresConfirmation: true,
+  async run(args, ctx) {
+    const branch = sanitizeBranch(String(args.branch));
+    if (!branch) throw new Error("Invalid branch name");
+
+    const localRef = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`]);
+    if (localRef.code === 0) {
+      const result = await git(ctx.repoRoot, ["checkout", branch]);
+      checkGitSuccess(result);
+      return `Switched to branch ${branch}`;
+    }
+
+    const remoteRef = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", `refs/remotes/origin/${branch}`]);
+    if (remoteRef.code === 0) {
+      // Not --track: a single-branch clone's remote.origin.fetch refspec
+      // only matches the branch it was cloned with, so git doesn't
+      // recognize a ref git_fetch created for any other branch as an
+      // eligible tracking target and --track fails with "is not a branch"
+      // even though the ref itself resolves fine.
+      const result = await git(ctx.repoRoot, ["checkout", "-b", branch, `origin/${branch}`]);
+      checkGitSuccess(result);
+      return `Switched to new branch ${branch} (from origin/${branch})`;
+    }
+
+    throw new Error(
+      `Branch '${branch}' not found locally or as origin/${branch}. Call git_fetch with this branch name first.`
+    );
+  },
+};
+
 export const gitCommitTool: ToolDefinition = {
   spec: {
     name: "git_commit",
@@ -137,7 +218,10 @@ export const gitCommitTool: ToolDefinition = {
 export const gitMergeTool: ToolDefinition = {
   spec: {
     name: "git_merge",
-    description: "Merge the given branch into the current branch.",
+    description:
+      "Merge the given branch into the current branch. The branch must already be local or fetched " +
+      "(git_fetch) and you must already be on the target branch (git_checkout) — merge merges INTO " +
+      "the current branch, it does not switch to one.",
     parameters: {
       type: "object",
       properties: {
@@ -152,9 +236,39 @@ export const gitMergeTool: ToolDefinition = {
     if (!branch) throw new Error("Invalid branch name");
     const result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
     if (result.code !== 0) {
-      throw new Error(`Merge failed (resolve manually, do not force):\n${result.stderr || result.stdout}`);
+      const output = result.stderr || result.stdout;
+      const mergeHead = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+      if (mergeHead.code === 0) {
+        // A real conflict: git leaves the working tree mid-merge (conflict
+        // markers written, MERGE_HEAD set) so it can be resolved in place —
+        // do not force through it. Spell out both ways to leave that state,
+        // since the model has no other way to learn this convention.
+        throw new Error(
+          `Merge conflict, working tree left mid-merge (do not force):\n${output}\n\n` +
+            "To resolve: fix the conflict markers in the listed files with edit_file, then call " +
+            "git_commit to record the merge. To give up instead, call git_merge_abort to restore " +
+            "the pre-merge state."
+        );
+      }
+      throw new Error(`Merge failed:\n${output}`);
     }
     return result.stdout;
+  },
+};
+
+export const gitMergeAbortTool: ToolDefinition = {
+  spec: {
+    name: "git_merge_abort",
+    description:
+      "Abort an in-progress merge left by a conflicting git_merge, restoring the working tree to its " +
+      "pre-merge state. Only valid right after a git_merge conflict.",
+    parameters: { type: "object", properties: {} },
+  },
+  requiresConfirmation: true,
+  async run(_args, ctx) {
+    const result = await git(ctx.repoRoot, ["merge", "--abort"]);
+    checkGitSuccess(result);
+    return "Merge aborted; working tree restored to its pre-merge state.";
   },
 };
 
