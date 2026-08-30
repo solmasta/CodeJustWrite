@@ -5,7 +5,7 @@ import { withAuth, requireToken, TokenData } from "./auth";
 import { getSecret } from "./secrets";
 import { createServer } from "http";
 import { resolve } from "path";
-import { existsSync } from "fs";
+import { existsSync, totalmem, freemem } from "fs";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 
@@ -14,6 +14,20 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 app.use(express.json({ limit: "100kb" }));
+
+// Structured logging
+function log(level: string, type: string, data: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    type,
+    ...data
+  }));
+}
+
+function logRequest(method: string, path: string, status: number, duration: number): void {
+  log("INFO", "http_request", { method, path, status, duration });
+}
 
 // Security headers
 app.use((req, res, next) => {
@@ -60,25 +74,68 @@ setInterval(() => {
     }
   }
   if (cleaned > 0) {
-    console.log(`Rate limit cleanup: removed ${cleaned} expired entries`);
+    log("INFO", "rate_limit_cleanup", { cleaned });
   }
 }, 5 * 60 * 1000);
 
 // HTTP rate limiting (60 requests per minute per IP)
 app.use((req, res, next) => {
+  const start = Date.now();
   const ip = req.ip || "unknown";
   if (!checkRateLimit(ip, 60, 60_000)) {
+    log("WARN", "rate_limit_exceeded", { ip, path: req.path });
     res.status(429).json({ error: "Too many requests" });
     return;
   }
+  res.on("finish", () => {
+    logRequest(req.method, req.path, res.statusCode, Date.now() - start);
+  });
   next();
 });
 
 const sessions = new SessionManager();
 
-// Health check endpoint (no auth required)
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+// Enhanced health check endpoint
+app.get("/api/health", async (_req, res) => {
+  const checks: Record<string, { status: string; latency?: number; error?: string }> = {};
+  const startMemory = totalmem() - freemem();
+  
+  // Check GitHub API
+  try {
+    const ghStart = Date.now();
+    const token = getSecret("GITHUB_TOKEN");
+    if (token) {
+      const res = await fetch("https://api.github.com/rate_limit", {
+        headers: { Authorization: `token ${token}`, "User-Agent": "CodeJustWrite/1.0" }
+      });
+      checks.github = { status: res.ok ? "ok" : "error", latency: Date.now() - ghStart };
+    } else {
+      checks.github = { status: "not_configured" };
+    }
+  } catch (e) {
+    checks.github = { status: "error", error: String(e) };
+  }
+  
+  // Memory check
+  const memUsed = startMemory;
+  const memTotal = totalmem();
+  const memPercent = (memUsed / memTotal) * 100;
+  checks.memory = {
+    status: memPercent > 90 ? "critical" : memPercent > 75 ? "warning" : "ok",
+    latency: Math.round(memUsed / 1024 / 1024)
+  };
+  
+  // Active sessions
+  checks.sessions = { status: "ok", latency: sessions.size() };
+  
+  const allOk = Object.values(checks).every(c => c.status === "ok" || c.status === "not_configured");
+  
+  res.json({
+    status: allOk ? "ok" : "degraded",
+    timestamp: new Date().toISOString(),
+    checks,
+    uptime: process.uptime()
+  });
 });
 
 // Auth status endpoint
@@ -95,8 +152,10 @@ app.post("/api/session/start", requireToken, async (req, res) => {
   }
   try {
     const session = await sessions.create(repoUrl, branch, res.locals.token);
+    log("AUDIT", "session_start", { sessionId: session.id, repoUrl, branch });
     res.json({ sessionId: session.id });
   } catch (e) {
+    log("ERROR", "session_start_error", { error: String(e) });
     res.status(500).json({ error: String(e) });
   }
 });
@@ -106,7 +165,6 @@ app.get("/api/github/repos", withAuth, async (req, res) => {
   const tokenData: TokenData = res.locals.token;
   const query = String(req.query.q || "");
   try {
-    // Use GitHub CLI if available, otherwise REST API
     const repos = await fetchGitHubRepos(tokenData, query);
     res.json(repos);
   } catch (e) {
@@ -150,12 +208,10 @@ if (existsSync(webDist)) {
 
 // WebSocket upgrade handling
 server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-  // Parse URL and query params
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const sessionId = url.searchParams.get("sessionId");
   const token = url.searchParams.get("token");
   
-  // Validate session
   if (!sessionId) {
     socket.destroy();
     return;
@@ -167,7 +223,6 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     return;
   }
   
-  // Validate token (prefer header, fallback to query param)
   const authHeader = req.headers.authorization;
   let tokenValid = false;
   
@@ -175,7 +230,6 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const headerToken = authHeader.slice(7);
     tokenValid = headerToken === session.token || headerToken === getSecret("AUTH_TOKEN");
   } else if (token) {
-    // Fallback to query param (less secure, exposed in logs/proxies)
     tokenValid = token === session.token || token === getSecret("AUTH_TOKEN");
   }
   
@@ -184,7 +238,6 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     return;
   }
   
-  // WebSocket rate limiting (100 messages per minute per session)
   const wsKey = `ws:${sessionId}`;
   
   wss.handleUpgrade(req, socket, head, (ws) => {
@@ -194,12 +247,12 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
 
 // WebSocket connection handling
 wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: string; send(message: unknown): void }, wsKey: string) => {
-  // Track message count for rate limiting
+  log("AUDIT", "ws_connect", { sessionId: session.id });
+  
   let messageCount = 0;
   let resetTime = Date.now() + 60_000;
   
   ws.on("message", (data) => {
-    // Check rate limit
     const now = Date.now();
     if (now > resetTime) {
       messageCount = 0;
@@ -211,7 +264,6 @@ wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: strin
       return;
     }
     
-    // Check message size (100KB limit)
     if (data instanceof Buffer && data.length > 100 * 1024) {
       ws.send(JSON.stringify({ type: "error", message: "Message too large" }));
       return;
@@ -219,7 +271,6 @@ wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: strin
     
     messageCount++;
     
-    // Forward to agent
     try {
       const msg = JSON.parse(String(data));
       session.send(msg);
@@ -228,7 +279,6 @@ wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: strin
     }
   });
   
-  // Echo back session events
   const originalSend = session.send.bind(session);
   session.send = (message: unknown) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -238,20 +288,19 @@ wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: strin
   };
   
   ws.on("close", () => {
-    // Cleanup: restore original send
+    log("AUDIT", "ws_disconnect", { sessionId: session.id });
     session.send = originalSend;
   });
 });
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
-  console.log("SIGTERM received, shutting down gracefully");
+  log("INFO", "shutdown", { reason: "SIGTERM" });
   server.close(() => {
-    console.log("Server closed");
+    log("INFO", "server_closed", {});
     process.exit(0);
   });
   
-  // Close all WebSocket connections
   wss.clients.forEach((client) => {
     client.close();
   });
@@ -259,5 +308,5 @@ process.on("SIGTERM", () => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  log("INFO", "server_start", { port: PORT });
 });
