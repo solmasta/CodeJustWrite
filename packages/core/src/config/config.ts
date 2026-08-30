@@ -1,9 +1,8 @@
-export type ProviderName = "openai" | "deepinfra" | "openrouter";
+export type ProviderName = "deepinfra" | "openrouter";
 
 export interface CjwConfig {
   provider: ProviderName;
   model: string;
-  openaiApiKey?: string;
   deepinfraApiKey?: string;
   openrouterApiKey?: string;
   githubToken?: string;
@@ -11,19 +10,17 @@ export interface CjwConfig {
 }
 
 const DEFAULT_MODELS: Record<ProviderName, string> = {
-  openai: "gpt-4.1",
   deepinfra: "meta-llama/Meta-Llama-3.1-70B-Instruct",
-  openrouter: "openai/gpt-4o-mini",
+  openrouter: "meta-llama/llama-3.1-70b-instruct",
 };
 
 export function loadConfig(): CjwConfig {
-  const provider = (process.env.CJW_DEFAULT_PROVIDER as ProviderName) || "openai";
-  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openai;
+  const provider = (process.env.CJW_DEFAULT_PROVIDER as ProviderName) || "deepinfra";
+  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.deepinfra;
 
   return {
     provider,
     model,
-    openaiApiKey: process.env.OPENAI_API_KEY,
     deepinfraApiKey: process.env.DEEPINFRA_KEY,
     openrouterApiKey: process.env.OPENROUTER_KEY,
     githubToken: process.env.GITHUB_TOKEN,

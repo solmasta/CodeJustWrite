@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import express from "express";
 import { WebSocketServer } from "ws";
-import { loadConfig, type ProviderName } from "@codejustwrite/core";
+import { loadConfig } from "@codejustwrite/core";
 import { loadServerConfig } from "./config.js";
 import { requireAuth, checkWsToken } from "./auth.js";
 import { SessionManager } from "./session.js";
@@ -203,11 +203,7 @@ httpServer.on("upgrade", (req, socket, head) => {
           session.setAutoApprove(Boolean(msg.value));
           break;
         case "set_provider":
-          session.setProvider(
-            msg.provider === "deepinfra" || msg.provider === "openrouter"
-              ? (msg.provider as ProviderName)
-              : "openai"
-          );
+          session.setProvider(msg.provider === "openrouter" ? "openrouter" : "deepinfra");
           session.send({
             type: "state",
             provider: session.provider,

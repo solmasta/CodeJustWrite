@@ -359,7 +359,7 @@ function sendChat(): void {
 
 // --- Settings Modal ---
 function openSettings(): void {
-  providerSelect.value = settings.provider || "openai";
+  providerSelect.value = settings.provider || "deepinfra";
   modelInput.value = settings.model || "";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   settingsModal.showModal();

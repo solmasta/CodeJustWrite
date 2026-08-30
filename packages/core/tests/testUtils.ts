@@ -6,8 +6,8 @@ import type { CjwConfig } from "../src/config/config.js";
 
 export function makeConfig(overrides: Partial<CjwConfig> = {}): CjwConfig {
   return {
-    provider: "openai",
-    model: "gpt-4.1",
+    provider: "deepinfra",
+    model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
     shellTimeoutSec: 30,
     ...overrides,
   };
