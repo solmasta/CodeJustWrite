@@ -16,6 +16,7 @@ const HELP_TEXT = `
 Slash commands:
   /help                Show this help
   /provider <name>     Switch LLM provider: deepinfra | openrouter
+  /models [filter]     List models available from the current provider (live), e.g. /models claude
   /model <name>        Switch model for the current provider
   /diff                Show git diff of the working tree
   /status              Show git status
@@ -99,6 +100,20 @@ export async function runRepl(config: CjwConfig): Promise<void> {
           state.provider = arg;
           state.model = defaultModelFor(arg);
           log.success(`Switched to ${state.provider}:${state.model}`);
+        }
+      } else if (cmd === "models") {
+        try {
+          const models = await registry.get(state.provider).listModels();
+          const filtered = arg
+            ? models.filter((m) => m.id.toLowerCase().includes(arg.toLowerCase()))
+            : models;
+          if (!filtered.length) {
+            log.info(arg ? `No models matching "${arg}" for ${state.provider}.` : `No models returned by ${state.provider}.`);
+          } else {
+            log.info(`${filtered.length} model(s) for ${state.provider}:\n` + filtered.map((m) => `  ${m.id}`).join("\n"));
+          }
+        } catch (err) {
+          log.error(`Couldn't list models: ${err instanceof Error ? err.message : String(err)}`);
         }
       } else if (cmd === "model") {
         if (!arg) {

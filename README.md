@@ -50,6 +50,7 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model meta-llama
 ```
 /help                Show available commands
 /provider <name>     Switch LLM provider: deepinfra | openrouter
+/models [filter]     List models available from the current provider (live), e.g. /models claude
 /model <name>         Switch model for the current provider
 /diff                 Show git diff of the working tree
 /status               Show git status
@@ -62,6 +63,17 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model meta-llama
 
 Anything else you type is sent to the agent, which can call any of the tools
 below as needed.
+
+### Switching models
+
+Both providers' catalogs change over time, so rather than hardcode model IDs
+that go stale, `/models` (CLI) and the model field's dropdown (PWA settings)
+fetch the provider's live model list. `openrouter` proxies several hosted
+Claude models under `anthropic/...` IDs alongside its other models — run
+`/provider openrouter` (with `OPENROUTER_KEY` set), then `/models claude` to
+see exactly which ones your OpenRouter account currently has access to, and
+`/model <id>` to switch to one. Pricing and availability are set by
+OpenRouter, not by this project.
 
 ## Quick start: phone PWA
 

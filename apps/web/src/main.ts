@@ -31,6 +31,8 @@ const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
 const modelInput = el<HTMLInputElement>("#model");
+const modelOptions = el<HTMLDataListElement>("#modelOptions");
+const modelHint = el<HTMLParagraphElement>("#modelHint");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
@@ -293,6 +295,25 @@ function handleServerMessage(msg: ServerMessage): void {
       isProcessing = false;
       break;
     }
+    case "models": {
+      const provider = String((msg as { provider?: string }).provider ?? "");
+      // Ignore a response to a provider the dropdown has since moved away from.
+      if (provider !== modelsRequestedFor || provider !== providerSelect.value) break;
+      const models = msg.models ?? [];
+      modelOptions.innerHTML = "";
+      for (const m of models) {
+        const option = document.createElement("option");
+        option.value = m.id;
+        modelOptions.appendChild(option);
+      }
+      text(
+        modelHint,
+        models.length
+          ? `${models.length} models available for ${provider} — start typing to filter, or paste any model id.`
+          : `Couldn't load the model list for ${provider}. Type a model id manually.`
+      );
+      break;
+    }
   }
 }
 
@@ -358,18 +379,34 @@ function sendChat(): void {
 }
 
 // --- Settings Modal ---
+let modelsRequestedFor: string | null = null;
+
 function openSettings(): void {
   providerSelect.value = settings.provider || "deepinfra";
   modelInput.value = settings.model || "";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   settingsModal.showModal();
+  refreshModels();
 }
 
 function closeSettings(): void {
   settingsModal.close();
 }
 
+/** Fetches the live model catalog for whichever provider is currently selected in the dropdown,
+ *  so the model field's suggestions reflect what that provider actually offers right now (Claude
+ *  models included, for OpenRouter) instead of a value someone has to already know and type. */
+function refreshModels(): void {
+  if (!connection) return;
+  const provider = providerSelect.value;
+  modelsRequestedFor = provider;
+  text(modelHint, "Loading available models…");
+  show(modelHint);
+  connection.send({ type: "list_models", provider });
+}
+
 function saveSettings(): void {
+  const previousProvider = settings.provider;
   const provider = providerSelect.value as Settings["provider"];
   const model = modelInput.value;
   const autoApprove = autoApproveCheck.checked;
@@ -378,7 +415,7 @@ function saveSettings(): void {
   settings = loadSettings();
 
   if (connection) {
-    if (provider !== settings.provider) connection.send({ type: "set_provider", provider });
+    if (provider !== previousProvider) connection.send({ type: "set_provider", provider });
     connection.send({ type: "set_model", model });
     connection.send({ type: "set_auto_approve", value: autoApprove });
   }
@@ -431,6 +468,7 @@ function init(): void {
   settingsBtn.addEventListener("click", openSettings);
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
+  providerSelect.addEventListener("change", refreshModels);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });

@@ -35,7 +35,8 @@ export interface ServerMessage {
     | "diff"
     | "awaiting_confirmation"
     | "error"
-    | "state";
+    | "state"
+    | "models";
   text?: string;
   name?: string;
   args?: unknown;
@@ -48,6 +49,7 @@ export interface ServerMessage {
   model?: string;
   autoApprove?: boolean;
   repoRoot?: string;
+  models?: { id: string }[];
 }
 
 export interface ChatMessage {

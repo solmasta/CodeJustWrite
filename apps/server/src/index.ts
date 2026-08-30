@@ -215,6 +215,16 @@ httpServer.on("upgrade", (req, socket, head) => {
         case "set_model":
           session.setModel(String(msg.model ?? session.model));
           break;
+        case "list_models": {
+          const provider = msg.provider === "openrouter" ? "openrouter" : "deepinfra";
+          session
+            .listModels(provider)
+            .then((models) => session.send({ type: "models", provider, models }))
+            .catch((err) =>
+              session.send({ type: "error", message: err instanceof Error ? err.message : String(err) })
+            );
+          break;
+        }
         default:
           session.send({ type: "error", message: `Unknown message type: ${String(msg.type)}` });
       }
