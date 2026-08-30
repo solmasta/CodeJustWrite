@@ -29,6 +29,10 @@ export interface StreamHandlers {
   onTextDelta?: (delta: string) => void;
 }
 
+export interface ModelInfo {
+  id: string;
+}
+
 export interface LLMProvider {
   readonly name: string;
   complete(
@@ -37,4 +41,6 @@ export interface LLMProvider {
     model: string,
     handlers?: StreamHandlers
   ): Promise<CompletionResult>;
+  /** Live model catalog from the provider, so the UI can offer a real up-to-date list instead of a hardcoded guess. */
+  listModels(): Promise<ModelInfo[]>;
 }

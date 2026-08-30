@@ -8,6 +8,7 @@ import {
   defaultModelFor,
   execSandboxed,
   type CjwConfig,
+  type ModelInfo,
   type ProviderName,
   type ToolContext,
 } from "@codejustwrite/core";
@@ -90,6 +91,12 @@ export class Session {
 
   setModel(model: string): void {
     this.model = model;
+  }
+
+  /** Live model catalog for the given provider (not necessarily the session's active one — the
+   *  settings UI needs to list models for whichever provider is currently selected there). */
+  async listModels(provider: ProviderName): Promise<ModelInfo[]> {
+    return this.registry.get(provider).listModels();
   }
 
   setAutoApprove(value: boolean): void {

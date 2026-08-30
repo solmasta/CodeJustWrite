@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   CompletionResult,
   LLMProvider,
+  ModelInfo,
   StreamHandlers,
   ToolCall,
   ToolSpec,
@@ -118,6 +119,15 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
         },
         finishReason: toolCalls.length ? "tool_calls" : finishReason,
       };
+    },
+
+    async listModels(): Promise<ModelInfo[]> {
+      const page = await client.models.list();
+      const models: ModelInfo[] = [];
+      for await (const m of page) {
+        models.push({ id: m.id });
+      }
+      return models.sort((a, b) => a.id.localeCompare(b.id));
     },
   };
 }

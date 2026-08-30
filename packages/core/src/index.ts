@@ -8,6 +8,7 @@ export { ProviderRegistry } from "./providers/registry.js";
 export type {
   ChatMessage,
   LLMProvider,
+  ModelInfo,
   ToolCall,
   ToolSpec,
   CompletionResult,

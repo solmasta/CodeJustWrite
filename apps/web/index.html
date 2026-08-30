@@ -109,8 +109,10 @@
         
         <label>
           Model
-          <input type="text" id="model" placeholder="meta-llama/Meta-Llama-3.1-70B-Instruct" />
+          <input type="text" id="model" list="modelOptions" placeholder="meta-llama/Meta-Llama-3.1-70B-Instruct" autocomplete="off" />
+          <datalist id="modelOptions"></datalist>
         </label>
+        <p id="modelHint" class="hint"></p>
 
         <div class="toggle-row">
           <span>Auto-approve tools</span>
