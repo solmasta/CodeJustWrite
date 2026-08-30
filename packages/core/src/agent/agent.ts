@@ -1,6 +1,6 @@
 import type { ChatMessage, LLMProvider } from "../providers/types.js";
-import { allTools, toolsByName } from "./tools/index.js";
-import type { ToolContext } from "./tools/index.js";
+import { allTools } from "./tools/index.js";
+import type { ToolContext, ToolDefinition } from "./tools/index.js";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const MAX_TOOL_ITERATIONS = 25;
@@ -9,6 +9,9 @@ export interface AgentDeps {
   getProvider: () => LLMProvider;
   getModel: () => string;
   ctx: ToolContext;
+  /** Defaults to the built-in tool set (git/shell/tests/browser/PR). Pass a superset — e.g.
+   *  [...allTools, ...mcpTools] — to add tools from connected MCP servers. */
+  tools?: ToolDefinition[];
   onTextDelta?: (delta: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string, error: boolean) => void;
@@ -16,8 +19,13 @@ export interface AgentDeps {
 
 export class Agent {
   private history: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  private readonly tools: ToolDefinition[];
+  private readonly toolsByName: Map<string, ToolDefinition>;
 
-  constructor(private deps: AgentDeps) {}
+  constructor(private deps: AgentDeps) {
+    this.tools = deps.tools ?? allTools;
+    this.toolsByName = new Map(this.tools.map((t) => [t.spec.name, t]));
+  }
 
   getHistory(): ChatMessage[] {
     return this.history;
@@ -36,7 +44,7 @@ export class Agent {
       const provider = this.deps.getProvider();
       const model = this.deps.getModel();
 
-      const result = await provider.complete(this.history, allTools.map((t) => t.spec), model, {
+      const result = await provider.complete(this.history, this.tools.map((t) => t.spec), model, {
         onTextDelta: this.deps.onTextDelta,
       });
 
@@ -57,7 +65,7 @@ export class Agent {
   }
 
   private async executeToolCall(call: { id: string; name: string; arguments?: string }): Promise<void> {
-    const tool = toolsByName.get(call.name);
+    const tool = this.toolsByName.get(call.name);
     const args = this.parseArgs(call.arguments);
 
     this.deps.onToolCall?.(call.name, args);
