@@ -382,6 +382,7 @@ body {
 
 .setup .row > label {
   flex: 1;
+  min-width: 0; /* let inputs shrink instead of overflowing the row on narrow screens */
 }
 
 .setup button.primary {
@@ -576,9 +577,14 @@ body {
   z-index: 10;
 }
 
-.drawer {
+/* Native <dialog>: browsers already hide it without [open] — only style the open state.
+   Chrome's default dialog stylesheet sets `left: 0` alongside `right: 0`; without
+   overriding `left` here too, that left-over UA default wins and the panel pins to
+   the left edge instead of the right. */
+.drawer[open] {
   position: fixed;
   top: 0;
+  left: auto;
   right: 0;
   bottom: 0;
   width: min(320px, 88vw);
@@ -590,6 +596,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  margin: 0;
+  max-height: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.drawer::backdrop {
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .drawer h2 {

@@ -1,3 +1,4 @@
+import "./style.css";
 import type { ServerMessage, Settings } from "./types.js";
 import { loadSettings, persistSettings } from "./settings.js";
 import { createConnection } from "./connection.js";
