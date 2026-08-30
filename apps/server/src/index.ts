@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import os from "node:os";
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { WebSocketServer } from "ws";
 import { loadConfig, type ProviderName } from "@codejustwrite/core";
 import { loadServerConfig } from "./config.js";
@@ -29,8 +29,47 @@ if (!serverConfig.authToken) {
 const workspacesDir = process.env.CJW_WORKSPACES_DIR || path.join(os.tmpdir(), "cjw-sessions");
 const sessions = new SessionManager(workspacesDir, agentConfig, serverConfig.sessionTtlMs, serverConfig.maxSessions);
 
+// Rate limiting: map IP -> { count, resetTime }
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 60; // 60 requests per minute
+
+function rateLimit(req: Request, res: Response, next: NextFunction): void {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetTime) {
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+    next();
+    return;
+  }
+  
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+    res.status(429).json({ error: "Rate limit exceeded. Try again later." });
+    return;
+  }
+  next();
+}
+
 const app = express();
 app.use(express.json());
+app.use(rateLimit);
+
+// Security headers
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  // CSP for PWA
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:;"
+  );
+  next();
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, activeSessions: sessions.size });
@@ -93,6 +132,11 @@ app.get(/^(?!\/api).*/, (_req, res) => {
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
+// WebSocket rate limiting
+const wsRateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const WS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const WS_RATE_LIMIT_MAX_MESSAGES = 100; // 100 messages per minute
+
 httpServer.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "", "http://localhost");
   if (url.pathname !== "/ws") {
@@ -100,7 +144,12 @@ httpServer.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  const token = url.searchParams.get("token");
+  // Get token from header instead of query param (more secure)
+  const authHeader = req.headers["authorization"];
+  const token = typeof authHeader === "string" && authHeader.startsWith("Bearer ") 
+    ? authHeader.slice(7) 
+    : url.searchParams.get("token"); // Fallback for backwards compatibility
+    
   const sessionId = url.searchParams.get("sessionId");
   if (!checkWsToken(serverConfig.authToken, token) || !sessionId) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -115,10 +164,32 @@ httpServer.on("upgrade", (req, socket, head) => {
     return;
   }
 
+  // Rate limit by IP
+  const ip = req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const entry = wsRateLimitMap.get(ip);
+  if (!entry || now > entry.resetTime) {
+    wsRateLimitMap.set(ip, { count: 1, resetTime: now + WS_RATE_LIMIT_WINDOW_MS });
+  } else {
+    entry.count++;
+    if (entry.count > WS_RATE_LIMIT_MAX_MESSAGES) {
+      socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+  }
+
   wss.handleUpgrade(req, socket, head, (ws) => {
     session.attach(ws);
 
+    // Message size limit
     ws.on("message", (raw) => {
+      // Reject messages > 100KB
+      if (raw.length > 100 * 1024) {
+        session.send({ type: "error", message: "Message too large (max 100KB)" });
+        return;
+      }
+      
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(raw.toString());
