@@ -39,6 +39,9 @@ function renderSetup(errorMessage?: string): void {
   );
   providerSelect.value = settings.provider;
 
+  const browseBtn = el("button", { className: "secondary", textContent: "Browse my repos" });
+  const repoList = el("div", { className: "repo-list" });
+
   const startBtn = el("button", { className: "primary", textContent: "Start session" });
   const form = el(
     "div",
@@ -48,6 +51,8 @@ function renderSetup(errorMessage?: string): void {
     el("label", {}, "Server URL", serverInput),
     el("label", {}, "Access token", tokenInput),
     el("label", {}, "Repo URL", repoInput),
+    browseBtn,
+    repoList,
     el(
       "div",
       { className: "row" },
@@ -58,6 +63,47 @@ function renderSetup(errorMessage?: string): void {
     startBtn
   );
   app.append(form);
+
+  browseBtn.addEventListener("click", async () => {
+    const token = tokenInput.value.trim();
+    const server = serverInput.value.trim();
+    repoList.innerHTML = "";
+    repoList.append(el("div", { className: "repo-status", textContent: "Loading repos…" }));
+
+    try {
+      const res = await fetch(`${httpBase({ ...settings, serverUrl: server })}/api/repos`, {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      repoList.innerHTML = "";
+      const repos = data.repos as { fullName: string; cloneUrl: string; defaultBranch: string; private: boolean }[];
+      if (!repos.length) {
+        repoList.append(el("div", { className: "repo-status", textContent: "No repos found." }));
+        return;
+      }
+      for (const repo of repos) {
+        const item = el(
+          "button",
+          { className: "repo-item", type: "button" },
+          el("span", { className: "name", textContent: repo.fullName }),
+          el("span", { className: "meta", textContent: repo.private ? "private" : "public" })
+        );
+        item.addEventListener("click", () => {
+          repoInput.value = repo.cloneUrl;
+          branchInput.value = repo.defaultBranch;
+          repoList.innerHTML = "";
+        });
+        repoList.append(item);
+      }
+    } catch (err) {
+      repoList.innerHTML = "";
+      repoList.append(
+        el("div", { className: "repo-status error", textContent: err instanceof Error ? err.message : String(err) })
+      );
+    }
+  });
 
   startBtn.addEventListener("click", async () => {
     settings.serverUrl = serverInput.value.trim();

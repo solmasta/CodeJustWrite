@@ -9,6 +9,7 @@ import { loadConfig, type ProviderName } from "@codejustwrite/core";
 import { loadServerConfig } from "./config.js";
 import { requireAuth, checkWsToken } from "./auth.js";
 import { SessionManager } from "./session.js";
+import { listRepos } from "./github.js";
 
 loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
@@ -36,6 +37,19 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api", requireAuth(serverConfig.authToken));
+
+app.get("/api/repos", async (_req, res) => {
+  if (!agentConfig.githubToken) {
+    res.status(400).json({ error: "GITHUB_TOKEN is not configured on the server." });
+    return;
+  }
+  try {
+    const repos = await listRepos(agentConfig.githubToken);
+    res.json({ repos });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 app.post("/api/sessions", async (req, res) => {
   const { repoUrl, branch } = req.body ?? {};

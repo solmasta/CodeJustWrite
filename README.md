@@ -110,10 +110,12 @@ Open the deployed URL in Safari (iOS) or Chrome (Android):
 - **Android**: browser menu → **Install app** / **Add to Home screen**
 
 It now opens full-screen like a native app. In the app: enter your access
-token, paste a repo URL (and optional branch), and tap **Start session** —
-the server clones that repo fresh for this session. Chat with the agent from
-there; risky actions (writes, shell, git, PR) show approve/deny buttons
-unless you flip **Auto-approve all actions** on in settings (⚙).
+token, then either tap **Browse my repos** to pick from the repos your
+server's `GITHUB_TOKEN` can see, or paste a repo URL directly (and optional
+branch). Tap **Start session** — the server clones that repo fresh for this
+session. Chat with the agent from there; risky actions (writes, shell, git,
+PR) show approve/deny buttons unless you flip **Auto-approve all actions**
+on in settings (⚙).
 
 ## Tools available to the agent
 
