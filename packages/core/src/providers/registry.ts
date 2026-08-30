@@ -21,7 +21,7 @@ export class ProviderRegistry {
       provider = createOpenAICompatibleProvider({ name: "openai", apiKey: this.cfg.openaiApiKey });
     } else if (providerName === "deepinfra") {
       if (!this.cfg.deepinfraApiKey) {
-        throw new Error("DEEPINFRA_API_KEY is not set. Add it to your .env to use the deepinfra provider.");
+        throw new Error("DEEPINFRA_KEY is not set. Add it to your .env to use the deepinfra provider.");
       }
       provider = createOpenAICompatibleProvider({
         name: "deepinfra",

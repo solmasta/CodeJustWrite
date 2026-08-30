@@ -22,7 +22,7 @@ export function loadConfig(): CjwConfig {
     provider,
     model,
     openaiApiKey: process.env.OPENAI_API_KEY,
-    deepinfraApiKey: process.env.DEEPINFRA_API_KEY,
+    deepinfraApiKey: process.env.DEEPINFRA_KEY,
     githubToken: process.env.GITHUB_TOKEN,
     shellTimeoutSec: Number(process.env.CJW_SHELL_TIMEOUT_SEC || 120),
   };
