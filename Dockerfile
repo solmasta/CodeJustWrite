@@ -5,23 +5,17 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 
-# Copy root package files first (for workspace resolution)
+# Copy root package files first
 COPY package.json package-lock.json ./
 
-# Copy all workspace package.json files to enable workspace resolution
-COPY packages/core/package.json packages/core/package.json
-COPY apps/cli/package.json apps/cli/package.json
-COPY apps/server/package.json apps/server/package.json
-COPY apps/web/package.json apps/web/package.json
-
-# Copy the actual source code
+# Copy all workspace source code (required for workspace resolution)
 COPY packages/core ./packages/core
 COPY apps/cli ./apps/cli
 COPY apps/server ./apps/server
 COPY apps/web ./apps/web
 
-# Install dependencies with workspace support
-RUN npm ci
+# Install dependencies - npm install handles workspaces better than npm ci
+RUN npm install
 
 # Build all workspaces
 RUN npm run build:core && npm run build:server && npm run build:web
