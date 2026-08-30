@@ -12,8 +12,18 @@ export interface Settings {
   provider: "openai" | "deepinfra" | "openrouter";
   model: string;
   autoApprove: boolean;
-  sessionId: string;
   recentRepos: RepoInfo[];
+}
+
+/**
+ * The in-progress session a tab is connected to. Kept in sessionStorage
+ * (tab-scoped) rather than Settings' localStorage (shared across tabs) so
+ * opening a second tab starts a genuinely independent session instead of
+ * silently overwriting the first tab's on the next reload.
+ */
+export interface ActiveSession {
+  sessionId: string;
+  repoName: string;
 }
 
 export interface ServerMessage {

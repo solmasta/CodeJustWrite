@@ -1,6 +1,8 @@
 import type { Settings } from "./types";
 import { apiBase } from "./utils";
 
+export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "reconnecting" | "failed";
+
 export interface ConnectionManager {
   send: (data: unknown) => void;
   close: () => void;
@@ -14,7 +16,7 @@ export interface ConnectionManager {
 export function createConnection(
   sessionId: string,
   settings: Settings,
-  onStatusChange: (status: "connecting" | "connected" | "disconnected" | "reconnecting") => void
+  onStatusChange: (status: ConnectionStatus) => void
 ): ConnectionManager {
   let socket: WebSocket | null = null;
   const messageQueue: string[] = [];
@@ -64,12 +66,16 @@ export function createConnection(
     
     socket.onclose = () => {
       socket = null;
-      onStatusChange("disconnected");
       closeHandler?.();
-      
+
       if (reconnectAttempts < maxReconnectAttempts) {
+        onStatusChange("disconnected");
         reconnectAttempts++;
         reconnectTimer = setTimeout(connect, getDelay());
+      } else {
+        // Given up — most likely the session no longer exists server-side
+        // (e.g. the server restarted). Retrying further won't help.
+        onStatusChange("failed");
       }
     };
     

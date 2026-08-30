@@ -117,6 +117,14 @@ session. Chat with the agent from there; risky actions (writes, shell, git,
 PR) show approve/deny buttons unless you flip **Auto-approve all actions**
 on in settings (⚙).
 
+**Working on multiple repos at once**: each browser tab tracks its own
+session independently (via `sessionStorage`), so opening a second tab to the
+same URL lands you back on the repo picker to start a separate session,
+rather than taking over the first tab's. Your sign-in token and recent
+repos are still shared across tabs — only the active session is per-tab.
+Use **Settings (⚙) → Change Repository** to leave the current session and
+pick a different one without signing out.
+
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique
