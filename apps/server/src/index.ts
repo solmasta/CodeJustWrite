@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { loadConfig, type CjwConfig, type ProviderName } from "@codejustwrite/core";
+import { loadConfig } from "@codejustwrite/core";
 import { SessionManager, Session } from "./session.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -200,7 +200,6 @@ wss.on("connection", async (ws: WebSocket, req) => {
 
   session.attach(ws);
 
-  const messageQueue: string[] = [];
   let isConnected = true;
 
   ws.on("message", async (data: Buffer) => {
