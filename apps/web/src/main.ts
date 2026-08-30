@@ -1,3 +1,4 @@
+import "./style.css";
 import type { ServerMessage, Settings } from "./types.js";
 import { loadSettings, persistSettings } from "./settings.js";
 import { createConnection } from "./connection.js";
@@ -67,8 +68,15 @@ async function handleSignIn(): Promise<void> {
     settings = loadSettings();
     const res = await apiFetch(settings, "/api/auth/status");
     if (!res.ok) {
-      const err = await res.text().catch(() => "Unknown error");
-      throw new Error(err || "Invalid token");
+      if (res.status === 401) {
+        throw new Error(
+          token
+            ? "Unauthorized — this token doesn't match the server's CJW_AUTH_TOKEN."
+            : "Unauthorized — this server requires an access token. Enter the CJW_AUTH_TOKEN you set for it."
+        );
+      }
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error || `Server returned HTTP ${res.status}`);
     }
     hide(signInError);
     await showRepoSection();
