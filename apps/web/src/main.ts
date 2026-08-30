@@ -1,6 +1,6 @@
 import "./style.css";
 import type { ServerMessage, Settings } from "./types.js";
-import { loadSettings, persistSettings } from "./settings.js";
+import { loadSettings, persistSettings, loadActiveSession, saveActiveSession, clearActiveSession } from "./settings.js";
 import { createConnection } from "./connection.js";
 import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
 
@@ -36,6 +36,7 @@ const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
 
 const signOutBtn = el<HTMLButtonElement>("#signOutBtn");
+const changeRepoBtn = el<HTMLButtonElement>("#changeRepoBtn");
 const repoList = el<HTMLDivElement>("#repoList");
 const repoSearch = el<HTMLInputElement>("#repoSearch");
 const recentReposSection = el<HTMLDivElement>("#recentReposSection");
@@ -171,15 +172,13 @@ async function startSession(): Promise<void> {
     const recent = settings.recentRepos || [];
     const existingIndex = recent.findIndex((r) => r.clone_url === repo);
     if (existingIndex >= 0) recent.splice(existingIndex, 1);
-    recent.unshift({
-      full_name: repo.replace(/^.*github\.com\//, "").replace(/\.git$/, ""),
-      clone_url: repo,
-      default_branch: branch,
-    });
-    persistSettings({ sessionId, recentRepos: recent.slice(0, 10) });
+    const repoName = repo.replace(/^.*github\.com\//, "").replace(/\.git$/, "");
+    recent.unshift({ full_name: repoName, clone_url: repo, default_branch: branch });
+    persistSettings({ recentRepos: recent.slice(0, 10) });
     settings = loadSettings();
+    saveActiveSession({ sessionId, repoName });
 
-    repoSub.textContent = recent[0].full_name;
+    repoSub.textContent = repoName;
     hide(repoSection);
     show(chatSection);
     connectWebSocket(sessionId);
@@ -193,14 +192,37 @@ async function startSession(): Promise<void> {
 }
 
 async function endSession(): Promise<void> {
-  if (!settings.sessionId) return;
-  await apiFetch(settings, `/api/session/${settings.sessionId}`, { method: "DELETE" }).catch(() => {});
+  const active = loadActiveSession();
+  if (!active) return;
+  await apiFetch(settings, `/api/session/${active.sessionId}`, { method: "DELETE" }).catch(() => {});
+}
+
+/** Leaves the current session and returns to the repo picker, keeping the sign-in token. */
+function backToRepoPicker(): void {
+  void endSession();
+  connection?.close();
+  connection = null;
+  clearActiveSession();
+  settingsModal.close();
+  chatHistory.innerHTML = "";
+  hide(chatSection);
+  void showRepoSection();
 }
 
 function connectWebSocket(sessionId: string): void {
   connection?.close();
 
   connection = createConnection(sessionId, settings, (status) => {
+    if (status === "failed") {
+      connectionStatus.className = "connection-status disconnected";
+      connectionStatus.textContent = "Session lost";
+      addBubble(
+        "system",
+        "Couldn't reconnect to this session — it may no longer exist on the server. " +
+          "Open Settings (⚙) → Change Repository to start a new one."
+      );
+      return;
+    }
     connectionStatus.className = `connection-status ${status}`;
     connectionStatus.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 
@@ -368,11 +390,13 @@ function init(): void {
   serverInput.value = settings.serverUrl || "";
   tokenInput.value = settings.token || "";
 
-  if (settings.sessionId) {
+  const active = loadActiveSession();
+  if (active) {
     show(chatSection);
     hide(signInSection);
     hide(repoSection);
-    connectWebSocket(settings.sessionId);
+    repoSub.textContent = active.repoName;
+    connectWebSocket(active.sessionId);
   } else if (settings.token) {
     void showRepoSection();
     hide(signInSection);
@@ -411,12 +435,16 @@ function init(): void {
     if (e.target === settingsModal) closeSettings();
   });
 
+  changeRepoBtn.addEventListener("click", backToRepoPicker);
+
   signOutBtn.addEventListener("click", () => {
     void endSession();
     connection?.close();
     connection = null;
-    persistSettings({ sessionId: "", token: "", recentRepos: [] });
+    clearActiveSession();
+    persistSettings({ token: "", recentRepos: [] });
     settings = loadSettings();
+    settingsModal.close();
     show(signInSection);
     hide(repoSection);
     hide(chatSection);
