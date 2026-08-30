@@ -24,12 +24,11 @@ app.use(express.json({ limit: "100kb" }));
 const AUTH_TOKEN = process.env.CJW_AUTH_TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-// Configuration
+// Configuration for SessionManager
 const WORKSPACES_DIR = process.env.WORKSPACES_DIR || "/tmp/cjw-workspaces";
 const SESSION_TTL_MINUTES = parseInt(process.env.SESSION_TTL_MINUTES || "30", 10);
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "50", 10);
 
-// CjwConfig for SessionManager
 const config = {
   provider: (process.env.DEFAULT_PROVIDER || "openai") as "openai" | "deepinfra" | "openrouter",
   model: process.env.DEFAULT_MODEL || "gpt-4o-mini",
