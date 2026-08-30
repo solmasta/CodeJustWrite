@@ -133,6 +133,11 @@ body {
 
 .messages {
   flex: 1;
+  /* A flex item's default min-height is "auto" (sized to content), which lets this box grow to
+     fit the whole chat history instead of clipping to the space #chatSection actually has —
+     overflow-y then never triggers, so the *page* becomes the scrollable region instead of this
+     box, and scrollToBottom() (which only scrolls this element) silently does nothing. */
+  min-height: 0;
   overflow-y: auto;
   padding: 14px;
   display: flex;
