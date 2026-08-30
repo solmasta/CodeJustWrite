@@ -34,7 +34,8 @@ function renderSetup(errorMessage?: string): void {
     "select",
     {},
     el("option", { value: "openai", textContent: "OpenAI" }),
-    el("option", { value: "deepinfra", textContent: "DeepInfra" })
+    el("option", { value: "deepinfra", textContent: "DeepInfra" }),
+    el("option", { value: "openrouter", textContent: "OpenRouter" })
   );
   providerSelect.value = settings.provider;
 
@@ -190,7 +191,8 @@ function openDrawer(): void {
     "select",
     {},
     el("option", { value: "openai", textContent: "OpenAI" }),
-    el("option", { value: "deepinfra", textContent: "DeepInfra" })
+    el("option", { value: "deepinfra", textContent: "DeepInfra" }),
+    el("option", { value: "openrouter", textContent: "OpenRouter" })
   );
   providerSelect.value = settings.provider;
   const modelInput = el("input", { value: settings.model });

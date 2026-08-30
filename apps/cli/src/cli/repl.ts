@@ -15,7 +15,7 @@ import {
 const HELP_TEXT = `
 Slash commands:
   /help                Show this help
-  /provider <name>     Switch LLM provider: openai | deepinfra
+  /provider <name>     Switch LLM provider: openai | deepinfra | openrouter
   /model <name>        Switch model for the current provider
   /diff                Show git diff of the working tree
   /status              Show git status
@@ -93,8 +93,8 @@ export async function runRepl(config: CjwConfig): Promise<void> {
         agent.reset();
         log.info("Conversation cleared.");
       } else if (cmd === "provider") {
-        if (arg !== "openai" && arg !== "deepinfra") {
-          log.error("Usage: /provider openai|deepinfra");
+        if (arg !== "openai" && arg !== "deepinfra" && arg !== "openrouter") {
+          log.error("Usage: /provider openai|deepinfra|openrouter");
         } else {
           state.provider = arg;
           state.model = defaultModelFor(arg);
