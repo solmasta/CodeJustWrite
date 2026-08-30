@@ -3,20 +3,52 @@ import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type { ToolDefinition } from "./types.js";
 
+// Maximum file size: 1MB
+const MAX_FILE_SIZE = 1024 * 1024;
+
 function resolveInRepo(repoRoot: string, relPath: string): string {
-  const resolved = path.resolve(repoRoot, relPath);
+  // Normalize paths for cross-platform compatibility
   const normalizedRoot = path.resolve(repoRoot);
-  if (resolved !== normalizedRoot && !resolved.startsWith(normalizedRoot + path.sep)) {
+  const resolved = path.resolve(normalizedRoot, relPath);
+  
+  // Security check: resolved path must be within repo root
+  // Handle both forward and back slashes on Windows
+  const resolvedLower = resolved.toLowerCase();
+  const rootLower = normalizedRoot.toLowerCase();
+  const sep = path.sep;
+  
+  if (resolved !== normalizedRoot && !resolvedLower.startsWith(rootLower + sep) && !resolvedLower.startsWith(rootLower + "/")) {
     throw new Error(`Path "${relPath}" escapes the repository root — refusing.`);
   }
+  
   return resolved;
 }
 
+function validateFilename(name: string): void {
+  // Reject filenames with null bytes
+  if (name.includes("\0")) {
+    throw new Error("Filename contains null bytes");
+  }
+  // Reject control characters
+  if (/[\x00-\x1f\x7f]/.test(name)) {
+    throw new Error("Filename contains control characters");
+  }
+}
+
 async function readTextFile(filePath: string): Promise<string> {
+  // Check file size before reading
+  const stats = await fs.stat(filePath).catch(() => null);
+  if (stats && stats.size > MAX_FILE_SIZE) {
+    throw new Error(`File too large (${stats.size} bytes, max ${MAX_FILE_SIZE})`);
+  }
   return fs.readFile(filePath, "utf8");
 }
 
 async function writeTextFile(filePath: string, content: string): Promise<void> {
+  // Validate content size
+  if (Buffer.byteLength(content, "utf8") > MAX_FILE_SIZE) {
+    throw new Error(`Content too large (max ${MAX_FILE_SIZE} bytes)`);
+  }
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
 }
@@ -40,7 +72,9 @@ export const readFileTool: ToolDefinition = {
     },
   },
   async run(args, ctx) {
-    const content = await readTextFile(resolveInRepo(ctx.repoRoot, String(args.path)));
+    const relPath = String(args.path);
+    validateFilename(relPath);
+    const content = await readTextFile(resolveInRepo(ctx.repoRoot, relPath));
     return numberedLines(content);
   },
 };
@@ -56,7 +90,9 @@ export const listDirTool: ToolDefinition = {
     },
   },
   async run(args, ctx) {
-    const entries = await fs.readdir(resolveInRepo(ctx.repoRoot, String(args.path)), { withFileTypes: true });
+    const relPath = String(args.path);
+    validateFilename(relPath);
+    const entries = await fs.readdir(resolveInRepo(ctx.repoRoot, relPath), { withFileTypes: true });
     return entries
       .map((e) => `${e.isDirectory() ? "d" : "f"} ${e.name}`)
       .sort()
@@ -79,12 +115,14 @@ export const writeFileTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const p = resolveInRepo(ctx.repoRoot, String(args.path));
+    const relPath = String(args.path);
+    validateFilename(relPath);
+    const p = resolveInRepo(ctx.repoRoot, relPath);
     const before = await readTextFile(p).catch(() => "");
     const after = String(args.content);
-    ctx.log(patchDiff(String(args.path), before, after));
+    ctx.log(patchDiff(relPath, before, after));
     await writeTextFile(p, after);
-    return `Wrote ${after.length} bytes to ${args.path}`;
+    return `Wrote ${after.length} bytes to ${relPath}`;
   },
 };
 
@@ -104,18 +142,19 @@ export const editFileTool: ToolDefinition = {
   },
   requiresConfirmation: true,
   async run(args, ctx) {
-    const p = resolveInRepo(ctx.repoRoot, String(args.path));
-    const filePath = String(args.path);
+    const relPath = String(args.path);
+    validateFilename(relPath);
+    const p = resolveInRepo(ctx.repoRoot, relPath);
     const before = await readTextFile(p);
     const find = String(args.find);
     const occurrences = before.split(find).length - 1;
 
-    if (occurrences === 0) throw new Error(`find text not found in ${filePath}`);
-    if (occurrences > 1) throw new Error(`find text is not unique in ${filePath} (${occurrences} matches)`);
+    if (occurrences === 0) throw new Error(`find text not found in ${relPath}`);
+    if (occurrences > 1) throw new Error(`find text is not unique in ${relPath} (${occurrences} matches)`);
 
     const after = before.replace(find, String(args.replace));
-    ctx.log(patchDiff(filePath, before, after));
+    ctx.log(patchDiff(relPath, before, after));
     await writeTextFile(p, after);
-    return `Edited ${filePath}`;
+    return `Edited ${relPath}`;
   },
 };
