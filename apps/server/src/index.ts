@@ -1,31 +1,64 @@
-import express from "express";
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import url from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { SessionManager } from "./session.js";
-import { requireAuth, checkWsToken } from "./auth.js";
 import { withGithubToken, redactSecrets } from "./secrets.js";
-import { createServer } from "http";
-import { resolve, dirname } from "path";
-import { existsSync } from "fs";
-import { fileURLToPath } from "url";
-import { totalmem, freemem } from "os";
-import type { IncomingMessage } from "http";
-import type { Duplex } from "stream";
+import { requireAuth, checkWsToken, AUTH_TOKEN } from "./auth.js";
+import { SessionManager, type AgentConfig as CjwConfig } from "@codejustwrite/core";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Constants
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const WORKSPACES_DIR = process.env.WORKSPACES_DIR || "/tmp/cjw-workspaces";
+const SESSION_TTL_MINUTES = parseInt(process.env.SESSION_TTL_MINUTES || "60", 10);
+const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "50", 10);
 
-const app = express();
-const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+// Config
+const config: CjwConfig = {
+  provider: (process.env.LLM_PROVIDER || "openai") as "openai" | "deepinfra" | "openrouter",
+  model: process.env.LLM_MODEL || "gpt-4o-mini",
+  apiKey: process.env.LLM_API_KEY || "",
+  baseUrl: process.env.LLM_BASE_URL,
+  maxTokens: parseInt(process.env.LLM_MAX_TOKENS || "4096", 10),
+  temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
+  shellTimeoutSec: parseInt(process.env.SHELL_TIMEOUT_SEC || "120", 10),
+};
 
-app.use(express.json({ limit: "100kb" }));
+// Session manager
+const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
 
-// Get auth token from environment
-const AUTH_TOKEN = process.env.CJW_AUTH_TOKEN;
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+// Rate limiting
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 60;
 
-// Structured logging
-function log(level: string, type: string, data: Record<string, unknown> = {}): void {
+// Health check
+async function checkHealth() {
+  const result = { status: "ok", timestamp: new Date().toISOString(), checks: {} as Record<string, { status: string; latency?: number }> };
+  
+  // Check GitHub API connectivity
+  try {
+    const start = Date.now();
+    const ghResponse = await fetch("https://api.github.com/rate_limit", {
+      headers: withGithubToken({ "User-Agent": "CodeJustWrite/1.0" })
+    });
+    result.checks.github = { status: ghResponse.ok ? "ok" : "error", latency: Date.now() - start };
+  } catch {
+    result.checks.github = { status: "error" };
+  }
+  
+  // Memory usage
+  const memUsage = process.memoryUsage();
+  result.checks.memory = { status: memUsage.heapUsed < memUsage.heapTotal ? "ok" : "warning", latency: memUsage.heapUsed };
+  
+  // Active sessions
+  result.checks.sessions = { status: "ok", latency: sessions.size };
+  
+  return result;
+}
+
+// Logging functions
+function log(level: string, type: string, data: Record<string, unknown> = {}) {
   console.log(JSON.stringify({
     timestamp: new Date().toISOString(),
     level,
@@ -34,277 +67,207 @@ function log(level: string, type: string, data: Record<string, unknown> = {}): v
   }));
 }
 
-function logRequest(method: string, path: string, status: number, duration: number): void {
-  log("INFO", "http_request", { method, path, status, duration });
+function logRequest(req: http.IncomingMessage, res: http.ServerResponse, duration: number) {
+  log("INFO", "http_request", {
+    method: req.method,
+    path: req.url,
+    status: res.statusCode,
+    duration
+  });
 }
 
-// Security headers
-app.use((req, res, next) => {
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;");
+function logAudit(action: string, data: Record<string, unknown> = {}) {
+  log("AUDIT", "audit", { action, ...data });
+}
+
+// Create HTTP server
+const server = http.createServer(async (req, res) => {
+  const start = Date.now();
+  const reqId = Math.random().toString(36).substring(2, 15);
+  
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  
+  // Security headers
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:;");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  next();
-});
-
-// Simple rate limiter with cleanup
-interface RateLimitEntry {
-  count: number;
-  resetTime: number;
-}
-
-const rateLimitMap = new Map<string, RateLimitEntry>();
-
-function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
+  
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  
+  // Rate limiting
+  const clientIp = req.headers["x-forwarded-for"]?.toString().split(",")[0] || req.socket.remoteAddress || "unknown";
   const now = Date.now();
-  const entry = rateLimitMap.get(key);
+  let rlInfo = rateLimitMap.get(clientIp);
   
-  if (!entry || now > entry.resetTime) {
-    rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
-    return true;
+  if (!rlInfo || now > rlInfo.resetTime) {
+    rlInfo = { count: 0, resetTime: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(clientIp, rlInfo);
   }
   
-  if (entry.count >= limit) {
-    return false;
-  }
+  rlInfo.count++;
   
-  entry.count++;
-  return true;
-}
-
-// Clean up expired entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  let cleaned = 0;
-  for (const [key, entry] of rateLimitMap.entries()) {
-    if (now > entry.resetTime) {
-      rateLimitMap.delete(key);
-      cleaned++;
-    }
-  }
-  if (cleaned > 0) {
-    log("INFO", "rate_limit_cleanup", { cleaned });
-  }
-}, 5 * 60 * 1000);
-
-// HTTP rate limiting (60 requests per minute per IP)
-app.use((req, res, next) => {
-  const start = Date.now();
-  const ip = req.ip || "unknown";
-  if (!checkRateLimit(ip, 60, 60_000)) {
-    log("WARN", "rate_limit_exceeded", { ip, path: req.path });
-    res.status(429).json({ error: "Too many requests" });
-    return;
-  }
-  res.on("finish", () => {
-    logRequest(req.method, req.path, res.statusCode, Date.now() - start);
-  });
-  next();
-});
-
-const sessions = new SessionManager();
-
-// Enhanced health check endpoint
-app.get("/api/health", async (_req, res) => {
-  const checks: Record<string, { status: string; latency?: number; error?: string }> = {};
-  const startMemory = totalmem() - freemem();
-  
-  // Check GitHub API
-  try {
-    const ghStart = Date.now();
-    if (GITHUB_TOKEN) {
-      const response = await fetch("https://api.github.com/rate_limit", {
-        headers: { Authorization: `token ${GITHUB_TOKEN}`, "User-Agent": "CodeJustWrite/1.0" }
-      });
-      checks.github = { status: response.ok ? "ok" : "error", latency: Date.now() - ghStart };
-    } else {
-      checks.github = { status: "not_configured" };
-    }
-  } catch (e) {
-    checks.github = { status: "error", error: String(e) };
-  }
-  
-  // Memory check
-  const memUsed = startMemory;
-  const memTotal = totalmem();
-  const memPercent = (memUsed / memTotal) * 100;
-  checks.memory = {
-    status: memPercent > 90 ? "critical" : memPercent > 75 ? "warning" : "ok",
-    latency: Math.round(memUsed / 1024 / 1024)
-  };
-  
-  // Active sessions
-  checks.sessions = { status: "ok", latency: sessions.size };
-  
-  const allOk = Object.values(checks).every(c => c.status === "ok" || c.status === "not_configured");
-  
-  res.json({
-    status: allOk ? "ok" : "degraded",
-    timestamp: new Date().toISOString(),
-    checks,
-    uptime: process.uptime()
-  });
-});
-
-// Auth status endpoint
-app.get("/api/auth/status", requireAuth(AUTH_TOKEN), (_req, res) => {
-  res.json({ authenticated: true });
-});
-
-// Session start endpoint
-app.post("/api/session/start", requireAuth(AUTH_TOKEN), async (req, res) => {
-  const { repoUrl, branch = "main" } = req.body || {};
-  if (!repoUrl || typeof repoUrl !== "string") {
-    res.status(400).json({ error: "Missing repoUrl" });
-    return;
-  }
-  try {
-    const session = await sessions.createSession(repoUrl, branch);
-    log("AUDIT", "session_start", { sessionId: session.id, repoUrl, branch });
-    res.json({ sessionId: session.id });
-  } catch (e) {
-    log("ERROR", "session_start_error", { error: String(e) });
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-// GitHub repos endpoint
-app.get("/api/github/repos", requireAuth(AUTH_TOKEN), async (req, res) => {
-  const query = String(req.query.q || "");
-  try {
-    const repos = await fetchGitHubRepos(query);
-    res.json(repos);
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
-
-async function fetchGitHubRepos(query: string): Promise<Array<{ full_name: string; clone_url: string; default_branch?: string }>> {
-  const headers: Record<string, string> = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "CodeJustWrite/1.0",
-  };
-  
-  if (GITHUB_TOKEN) {
-    headers["Authorization"] = `token ${GITHUB_TOKEN}`;
-  }
-  
-  const url = query
-    ? `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}+in:name&sort=stars&order=desc&per_page=30`
-    : `https://api.github.com/user/repos?per_page=30&sort=updated`;
-  
-  const response = await fetch(url, { headers });
-  if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
-  
-  const data = await response.json() as { items?: Array<{ full_name: string; clone_url: string; default_branch?: string }> };
-  
-  if (query && data.items) {
-    return data.items;
-  }
-  return Array.isArray(data) ? data : [];
-}
-
-// Serve static files from web app
-const webDist = resolve(__dirname, "../../web/dist");
-if (existsSync(webDist)) {
-  app.use(express.static(webDist));
-  app.get("*", (_req, res) => {
-    res.sendFile(resolve(webDist, "index.html"));
-  });
-}
-
-// WebSocket upgrade handling
-server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host}`);
-  const sessionId = url.searchParams.get("sessionId");
-  const token = url.searchParams.get("token");
-  
-  if (!sessionId) {
-    socket.destroy();
+  if (rlInfo.count > RATE_LIMIT_MAX) {
+    res.writeHead(429, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Too many requests" }));
+    log("WARN", "rate_limit", { clientIp, count: rlInfo.count });
     return;
   }
   
-  const session = sessions.get(sessionId);
-  if (!session) {
-    socket.destroy();
+  // Parse URL
+  const parsedUrl = url.parse(req.url || "/", true);
+  const pathname = parsedUrl.pathname || "/";
+  
+  // Health check
+  if (pathname === "/api/health") {
+    const health = await checkHealth();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(health));
+    logRequest(req, res, Date.now() - start);
     return;
   }
   
-  // Validate token
-  if (!checkWsToken(AUTH_TOKEN, token)) {
-    socket.destroy();
-    return;
-  }
-  
-  const wsKey = `ws:${sessionId}`;
-  
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit("connection", ws, req, session, wsKey);
-  });
-});
-
-// WebSocket connection handling
-wss.on("connection", (ws: WebSocket, _req: IncomingMessage, session: { id: string; send(message: unknown): void }, wsKey: string) => {
-  log("AUDIT", "ws_connect", { sessionId: session.id });
-  
-  let messageCount = 0;
-  let resetTime = Date.now() + 60_000;
-  
-  ws.on("message", (data) => {
-    const now = Date.now();
-    if (now > resetTime) {
-      messageCount = 0;
-      resetTime = now + 60_000;
-    }
-    
-    if (messageCount >= 100) {
-      ws.send(JSON.stringify({ type: "error", message: "Rate limit exceeded" }));
+  // Auth-protected endpoints
+  if (pathname.startsWith("/api/")) {
+    const authResult = requireAuth(req);
+    if (!authResult.success) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: authResult.error }));
+      logAudit("auth_failed", { path: pathname, reason: authResult.error });
       return;
     }
-    
-    if (data instanceof Buffer && data.length > 100 * 1024) {
-      ws.send(JSON.stringify({ type: "error", message: "Message too large" }));
-      return;
-    }
-    
-    messageCount++;
-    
-    try {
-      const msg = JSON.parse(String(data));
-      session.send(msg);
-    } catch {
-      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-    }
-  });
+  }
   
-  const originalSend = session.send.bind(session);
-  session.send = (message: unknown) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
-    }
-    return originalSend(message);
-  };
+  // API endpoints
+  if (pathname === "/api/repos") {
+    const repos = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
+      headers: withGithubToken({ "User-Agent": "CodeJustWrite/1.0" })
+    }).then(r => r.json());
+    
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(repos.map((r: { full_name: string; html_url: string; description: string | null }) => ({
+      name: r.full_name,
+      url: r.html_url,
+      description: r.description
+    }))));
+    logAudit("repos_fetched", { count: repos.length });
+    logRequest(req, res, Date.now() - start);
+    return;
+  }
+  
+  // Serve static files
+  const staticPath = path.join(process.cwd(), "dist", pathname);
+  if (fs.existsSync(staticPath) && fs.statSync(staticPath).isFile()) {
+    const ext = path.extname(staticPath);
+    const contentType = ext === ".js" ? "application/javascript" : ext === ".css" ? "text/css" : ext === ".html" ? "text/html" : "text/plain";
+    res.writeHead(200, { "Content-Type": contentType });
+    res.end(fs.readFileSync(staticPath));
+    return;
+  }
+  
+  // Serve index.html for SPA
+  const indexPath = path.join(process.cwd(), "dist", "index.html");
+  if (fs.existsSync(indexPath)) {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(fs.readFileSync(indexPath));
+  } else {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeJustWrite</title>
+  <style>
+    body { font-family: system-ui; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #eee; }
+    .container { text-align: center; padding: 2rem; background: #16213e; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    h1 { color: #00d4ff; margin-bottom: 0.5rem; }
+    p { color: #aaa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>CodeJustWrite</h1>
+    <p>AI-powered code generation</p>
+  </div>
+</body>
+</html>`);
+  }
+  
+  logRequest(req, res, Date.now() - start);
+});
+
+// WebSocket server
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on("connection", (ws: WebSocket, sessionId: string) => {
+  logAudit("ws_connect", { sessionId });
   
   ws.on("close", () => {
-    log("AUDIT", "ws_disconnect", { sessionId: session.id });
-    session.send = originalSend;
+    logAudit("ws_disconnect", { sessionId });
+    sessions.closeSession(sessionId);
   });
+  
+  ws.on("error", (err) => {
+    log("ERROR", "ws_error", { sessionId, error: err.message });
+  });
+  
+  sessions.handleSession(sessionId, ws);
 });
+
+server.on("upgrade", (req, socket, head) => {
+  const parsedUrl = url.parse(req.url || "", true);
+  const pathname = parsedUrl.pathname || "/";
+  
+  if (pathname === "/ws") {
+    const sessionId = parsedUrl.query.sessionId as string;
+    const token = parsedUrl.query.token as string;
+    
+    if (!sessionId || !checkWsToken(token, AUTH_TOKEN)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      logAudit("ws_rejected", { reason: "Invalid token or sessionId" });
+      return;
+    }
+    
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, sessionId);
+    });
+  } else {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+  }
+});
+
+// Cleanup rate limit map periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of rateLimitMap.entries()) {
+    if (now > value.resetTime) {
+      rateLimitMap.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
   log("INFO", "shutdown", { reason: "SIGTERM" });
+  wss.close();
+  sessions.cleanup();
   server.close(() => {
-    log("INFO", "server_closed", {});
     process.exit(0);
-  });
-  
-  wss.clients.forEach((client) => {
-    client.close();
   });
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  log("INFO", "server_start", { port: PORT });
+  log("INFO", "startup", { port: PORT, workspacesDir: WORKSPACES_DIR });
 });
