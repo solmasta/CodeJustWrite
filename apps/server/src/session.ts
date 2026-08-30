@@ -11,6 +11,7 @@ import {
   type ProviderName,
   type ToolContext,
 } from "@codejustwrite/core";
+import { redactSecrets, withGithubToken } from "./secrets.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
@@ -27,6 +28,7 @@ export class Session {
 
   private agent: Agent;
   private pendingConfirmations = new Map<string, PendingConfirmation>();
+  private readonly secrets: string[];
 
   constructor(
     readonly repoRoot: string,
@@ -35,6 +37,9 @@ export class Session {
   ) {
     this.provider = config.provider;
     this.model = config.model;
+    this.secrets = [config.githubToken, config.openaiApiKey, config.deepinfraApiKey].filter(
+      (s): s is string => !!s
+    );
 
     const ctx: ToolContext = {
       repoRoot: this.repoRoot,
@@ -74,7 +79,7 @@ export class Session {
 
   send(message: Record<string, unknown>): void {
     if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      this.ws.send(JSON.stringify(message));
+      this.ws.send(JSON.stringify(redactSecrets(message, this.secrets)));
     }
   }
 
@@ -159,14 +164,18 @@ export class SessionManager {
     await fs.mkdir(this.workspacesDir, { recursive: true });
     const dir = path.join(this.workspacesDir, randomUUID());
 
+    const authenticatedUrl = withGithubToken(repoUrl, this.config.githubToken);
     const branchFlag = branch ? ` --branch ${branch}` : "";
-    const clone = await execSandboxed(`git clone --depth 50${branchFlag} "${repoUrl}" "${dir}"`, {
+    const clone = await execSandboxed(`git clone --depth 50${branchFlag} "${authenticatedUrl}" "${dir}"`, {
       cwd: this.workspacesDir,
       timeoutSec: 120,
     });
     if (clone.code !== 0) {
       await fs.rm(dir, { recursive: true, force: true });
-      throw new Error(`Failed to clone ${repoUrl}: ${clone.stderr || clone.stdout}`);
+      const secrets = this.config.githubToken ? [this.config.githubToken] : [];
+      throw new Error(
+        `Failed to clone ${repoUrl}: ${redactSecrets(clone.stderr || clone.stdout, secrets)}`
+      );
     }
 
     const session = new Session(dir, this.registry, this.config);

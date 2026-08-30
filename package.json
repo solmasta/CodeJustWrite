@@ -17,7 +17,7 @@
     "dev:server": "npm run dev --workspace=@codejustwrite/server",
     "dev:web": "npm run dev --workspace=@codejustwrite/web",
     "start": "npm run start --workspace=@codejustwrite/server",
-    "test": "npm run test --workspace=@codejustwrite/core",
+    "test": "npm run test --workspace=@codejustwrite/core && npm run test --workspace=@codejustwrite/server",
     "lint": "eslint apps/*/src packages/*/src",
     "typecheck": "npm run typecheck --workspace=@codejustwrite/core && npm run typecheck --workspace=@codejustwrite/cli && npm run typecheck --workspace=@codejustwrite/server"
   },
