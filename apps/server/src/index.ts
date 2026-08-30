@@ -1,20 +1,28 @@
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { SessionManager } from "./session.js";
-import { withAuth, requireToken, TokenData } from "./auth.js";
-import { getSecret } from "./secrets.js";
+import { requireAuth, checkWsToken } from "./auth.js";
+import { withGithubToken, redactSecrets } from "./secrets.js";
 import { createServer } from "http";
-import { resolve } from "path";
+import { resolve, dirname } from "path";
 import { existsSync } from "fs";
+import { fileURLToPath } from "url";
 import { totalmem, freemem } from "os";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 app.use(express.json({ limit: "100kb" }));
+
+// Get auth token from environment
+const AUTH_TOKEN = process.env.CJW_AUTH_TOKEN;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
 // Structured logging
 function log(level: string, type: string, data: Record<string, unknown> = {}): void {
@@ -104,12 +112,11 @@ app.get("/api/health", async (_req, res) => {
   // Check GitHub API
   try {
     const ghStart = Date.now();
-    const token = getSecret("GITHUB_TOKEN");
-    if (token) {
-      const res = await fetch("https://api.github.com/rate_limit", {
-        headers: { Authorization: `token ${token}`, "User-Agent": "CodeJustWrite/1.0" }
+    if (GITHUB_TOKEN) {
+      const response = await fetch("https://api.github.com/rate_limit", {
+        headers: { Authorization: `token ${GITHUB_TOKEN}`, "User-Agent": "CodeJustWrite/1.0" }
       });
-      checks.github = { status: res.ok ? "ok" : "error", latency: Date.now() - ghStart };
+      checks.github = { status: response.ok ? "ok" : "error", latency: Date.now() - ghStart };
     } else {
       checks.github = { status: "not_configured" };
     }
@@ -127,7 +134,7 @@ app.get("/api/health", async (_req, res) => {
   };
   
   // Active sessions
-  checks.sessions = { status: "ok", latency: sessions.size() };
+  checks.sessions = { status: "ok", latency: sessions.size };
   
   const allOk = Object.values(checks).every(c => c.status === "ok" || c.status === "not_configured");
   
@@ -140,19 +147,19 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // Auth status endpoint
-app.get("/api/auth/status", withAuth, (_req, res) => {
+app.get("/api/auth/status", requireAuth(AUTH_TOKEN), (_req, res) => {
   res.json({ authenticated: true });
 });
 
 // Session start endpoint
-app.post("/api/session/start", requireToken, async (req, res) => {
+app.post("/api/session/start", requireAuth(AUTH_TOKEN), async (req, res) => {
   const { repoUrl, branch = "main" } = req.body || {};
   if (!repoUrl || typeof repoUrl !== "string") {
     res.status(400).json({ error: "Missing repoUrl" });
     return;
   }
   try {
-    const session = await sessions.create(repoUrl, branch, res.locals.token);
+    const session = await sessions.createSession(repoUrl, branch);
     log("AUDIT", "session_start", { sessionId: session.id, repoUrl, branch });
     res.json({ sessionId: session.id });
   } catch (e) {
@@ -162,35 +169,34 @@ app.post("/api/session/start", requireToken, async (req, res) => {
 });
 
 // GitHub repos endpoint
-app.get("/api/github/repos", withAuth, async (req, res) => {
-  const tokenData: TokenData = res.locals.token;
+app.get("/api/github/repos", requireAuth(AUTH_TOKEN), async (req, res) => {
   const query = String(req.query.q || "");
   try {
-    const repos = await fetchGitHubRepos(tokenData, query);
+    const repos = await fetchGitHubRepos(query);
     res.json(repos);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
 });
 
-async function fetchGitHubRepos(token: TokenData, query: string): Promise<Array<{ full_name: string; clone_url: string; default_branch?: string }>> {
+async function fetchGitHubRepos(query: string): Promise<Array<{ full_name: string; clone_url: string; default_branch?: string }>> {
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github.v3+json",
     "User-Agent": "CodeJustWrite/1.0",
   };
   
-  if (token.githubToken) {
-    headers["Authorization"] = `token ${token.githubToken}`;
+  if (GITHUB_TOKEN) {
+    headers["Authorization"] = `token ${GITHUB_TOKEN}`;
   }
   
   const url = query
     ? `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}+in:name&sort=stars&order=desc&per_page=30`
     : `https://api.github.com/user/repos?per_page=30&sort=updated`;
   
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
+  const response = await fetch(url, { headers });
+  if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
   
-  const data = await res.json() as { items?: Array<{ full_name: string; clone_url: string; default_branch?: string }>; full_name?: string };
+  const data = await response.json() as { items?: Array<{ full_name: string; clone_url: string; default_branch?: string }> };
   
   if (query && data.items) {
     return data.items;
@@ -224,17 +230,8 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     return;
   }
   
-  const authHeader = req.headers.authorization;
-  let tokenValid = false;
-  
-  if (authHeader?.startsWith("Bearer ")) {
-    const headerToken = authHeader.slice(7);
-    tokenValid = headerToken === session.token || headerToken === getSecret("AUTH_TOKEN");
-  } else if (token) {
-    tokenValid = token === session.token || token === getSecret("AUTH_TOKEN");
-  }
-  
-  if (!tokenValid) {
+  // Validate token
+  if (!checkWsToken(AUTH_TOKEN, token)) {
     socket.destroy();
     return;
   }

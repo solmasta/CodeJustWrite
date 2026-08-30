@@ -45,3 +45,9 @@ export function redactSecrets<T>(value: T, secrets: string[]): T {
   }
   return value;
 }
+
+/** Get a secret from environment variables */
+export function getSecret(name: string): string | undefined {
+  const envVar = `CJW_${name.toUpperCase()}`;
+  return process.env[envVar];
+}
