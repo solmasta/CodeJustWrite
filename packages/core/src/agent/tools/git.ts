@@ -4,7 +4,7 @@ import type { ToolDefinition } from "./types.js";
 interface GitResult {
   stdout: string;
   stderr: string;
-  code: number;
+  code: number | null;
 }
 
 async function git(repoRoot: string, args: string[], timeoutSec = 30): Promise<GitResult> {
