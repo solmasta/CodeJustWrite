@@ -12,7 +12,7 @@ services:
         sync: false # set to a long random secret in the Render dashboard
       - key: OPENAI_API_KEY
         sync: false
-      - key: DEEPINFRA_API_KEY
+      - key: DEEPINFRA_KEY
         sync: false
       - key: GITHUB_TOKEN
         sync: false
