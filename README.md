@@ -143,15 +143,22 @@ pick a different one without signing out.
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique
   find/replace), all confined to the repository root.
 - **Git & GitHub** — `git_status`, `git_diff`, `git_create_branch`,
-  `git_commit`, `git_merge`, `git_push`, and `create_pull_request` (uses the
-  `gh` CLI when installed and authenticated, otherwise falls back to the
-  GitHub REST API with a `GITHUB_TOKEN`).
+  `git_fetch`, `git_checkout`, `git_commit`, `git_merge`, `git_merge_abort`,
+  `git_push`, and `create_pull_request` (uses the `gh` CLI when installed and
+  authenticated, otherwise falls back to the GitHub REST API with a
+  `GITHUB_TOKEN`). `git_merge` automatically deepens a shallow clone's
+  history and retries once if that's the only reason two branches look
+  unrelated.
 - **Sandbox**
   - `run_shell` — constrained subprocess execution with a wall-clock timeout
     and truncated output.
   - `run_tests` — spins up a disposable `git worktree` carrying uncommitted
     changes, auto-detects npm/yarn/pnpm, installs deps, and runs the
-    test/lint script there — the real working tree is never touched.
+    test/lint script there — the real working tree is never touched. Also
+    installs a subdirectory's own dependencies when the script just `cd`s
+    into one (common in repos that aren't a formal npm/yarn/pnpm workspace,
+    e.g. `"test": "cd frontend && npm test"`), and retries a failed npm
+    install with `--legacy-peer-deps` on a peer-dependency conflict.
   - `browser_check` — drives headless Chromium via Playwright to a URL,
     performs click/fill/waitForSelector/evaluate actions, captures console
     errors, and saves a screenshot. Requires Chromium to actually be

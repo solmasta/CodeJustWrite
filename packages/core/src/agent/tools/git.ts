@@ -221,7 +221,8 @@ export const gitMergeTool: ToolDefinition = {
     description:
       "Merge the given branch into the current branch. The branch must already be local or fetched " +
       "(git_fetch) and you must already be on the target branch (git_checkout) — merge merges INTO " +
-      "the current branch, it does not switch to one.",
+      "the current branch, it does not switch to one. Automatically deepens a shallow clone's " +
+      "history and retries once if the two branches only look unrelated due to that.",
     parameters: {
       type: "object",
       properties: {
@@ -234,7 +235,22 @@ export const gitMergeTool: ToolDefinition = {
   async run(args, ctx) {
     const branch = sanitizeBranch(String(args.branch));
     if (!branch) throw new Error("Invalid branch name");
-    const result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
+    let result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
+
+    // Sessions clone shallowly (see apps/server/src/session.ts), so merging any branch whose
+    // real common ancestor with the current branch falls outside that shallow window fails here
+    // even though the two branches aren't actually unrelated — only their fetched history is
+    // truncated. Fill in full history once, on demand, and retry exactly once.
+    if (result.code !== 0 && /unrelated histories/i.test(result.stderr || result.stdout)) {
+      const isShallow = await git(ctx.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      if (isShallow.stdout.trim() === "true") {
+        const unshallow = await git(ctx.repoRoot, ["fetch", "--unshallow", "origin"], 300);
+        if (unshallow.code === 0) {
+          result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
+        }
+      }
+    }
+
     if (result.code !== 0) {
       const output = result.stderr || result.stdout;
       const mergeHead = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
