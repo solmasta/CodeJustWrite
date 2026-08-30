@@ -52,6 +52,7 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model meta-llama
 /provider <name>     Switch LLM provider: deepinfra | openrouter
 /models [filter]     List models available from the current provider (live), e.g. /models claude
 /model <name>         Switch model for the current provider
+/mcp                  Show connected MCP servers and their tools
 /diff                 Show git diff of the working tree
 /status               Show git status
 /commit <message>     Stage all changes and commit
@@ -158,6 +159,47 @@ pick a different one without signing out.
     chromium`); the Docker image doesn't bundle it by default to keep the
     image small.
 
+### MCP connectors (static API key/token)
+
+Beyond the built-in tools above, the agent can attach external [MCP]
+(Model Context Protocol) servers as extra tools — the same mechanism behind
+connectors like GitHub or Render. This first cut covers servers authenticated
+with a static credential (an API key or token you already have), not OAuth.
+
+Set `CJW_MCP_SERVERS` to a JSON array, one entry per server:
+
+```json
+[
+  {
+    "name": "github",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "apiKey": "ghp_...",
+    "apiKeyEnvVar": "GITHUB_PERSONAL_ACCESS_TOKEN"
+  },
+  {
+    "name": "render",
+    "transport": "http",
+    "url": "https://mcp.render.com/mcp",
+    "apiKey": "rnd_..."
+  }
+]
+```
+
+- `transport: "stdio"` spawns `command`/`args` as a subprocess and speaks MCP
+  over its stdin/stdout; `apiKey` is passed to it as an environment variable
+  (`apiKeyEnvVar`, default `API_KEY`) — the pattern most official MCP servers
+  expect.
+- `transport: "http"` connects to a remote MCP server's Streamable HTTP
+  endpoint; `apiKey` (if set) is sent as `Authorization: Bearer <apiKey>`.
+- Each server's tools appear to the agent as `mcp_<name>_<tool>` and require
+  approval like the built-in git/shell/PR tools do, unless the server itself
+  marks a tool read-only.
+- A server that fails to connect (bad command, unreachable URL, wrong key)
+  is skipped with a logged warning rather than breaking the rest of the
+  agent's tools — check `/mcp` (CLI) or the server's startup log for status.
+
 ## Development
 
 ```bash
@@ -187,3 +229,9 @@ npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
 - Each PWA session clones its repo into its own disposable workspace
   (default: OS temp dir, cleaned up when the session ends or goes idle past
   `CJW_SESSION_TTL_MIN`), so sessions don't share state or history.
+- MCP connector tools (`CJW_MCP_SERVERS`) are third-party code the agent can
+  call — they require approval by default, same as the built-in git/shell/PR
+  tools, unless the server marks a tool read-only. A stdio connector's
+  `apiKey` is only ever passed to that connector's own subprocess as an env
+  var; an http connector's `apiKey` is only ever sent to that connector's own
+  URL as a bearer token.

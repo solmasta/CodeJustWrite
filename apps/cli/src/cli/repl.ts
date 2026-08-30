@@ -4,6 +4,8 @@ import chalk from "chalk";
 import {
   Agent,
   ProviderRegistry,
+  allTools,
+  connectMcpServers,
   defaultModelFor,
   execSandboxed,
   log,
@@ -18,6 +20,7 @@ Slash commands:
   /provider <name>     Switch LLM provider: deepinfra | openrouter
   /models [filter]     List models available from the current provider (live), e.g. /models claude
   /model <name>        Switch model for the current provider
+  /mcp                  Show connected MCP servers and their tools
   /diff                Show git diff of the working tree
   /status              Show git status
   /commit <message>    Stage all changes and commit
@@ -54,10 +57,20 @@ export async function runRepl(config: CjwConfig): Promise<void> {
     },
   };
 
+  const mcp = await connectMcpServers(config.mcpServers);
+  for (const status of mcp.statuses) {
+    if (status.connected) {
+      log.dim(`[mcp] ${status.name}: connected (${status.toolCount} tool(s))`);
+    } else {
+      log.error(`[mcp] ${status.name}: failed to connect — ${status.error}`);
+    }
+  }
+
   const agent = new Agent({
     getProvider: () => registry.get(state.provider),
     getModel: () => state.model,
     ctx,
+    tools: [...allTools, ...mcp.tools],
     onTextDelta: (delta) => log.assistant(delta),
     onToolCall: (name, args) => log.tool(`\n→ ${name}(${JSON.stringify(args)})`),
     onToolResult: (name, result, isError) => {
@@ -77,6 +90,7 @@ export async function runRepl(config: CjwConfig): Promise<void> {
     } catch {
       // stdin closed (e.g. Ctrl+D, or piped input ran out) — exit gracefully.
       log.dim("\nGoodbye.");
+      await mcp.close();
       return;
     }
     if (!input) continue;
@@ -89,7 +103,18 @@ export async function runRepl(config: CjwConfig): Promise<void> {
         log.info(HELP_TEXT);
       } else if (cmd === "exit" || cmd === "quit") {
         rl.close();
+        await mcp.close();
         return;
+      } else if (cmd === "mcp") {
+        if (!mcp.statuses.length) {
+          log.info("No MCP servers configured (set CJW_MCP_SERVERS to add some).");
+        } else {
+          log.info(
+            mcp.statuses
+              .map((s) => (s.connected ? `${s.name}: connected (${s.toolCount} tool(s))` : `${s.name}: failed — ${s.error}`))
+              .join("\n")
+          );
+        }
       } else if (cmd === "clear") {
         agent.reset();
         log.info("Conversation cleared.");

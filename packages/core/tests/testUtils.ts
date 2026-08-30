@@ -9,6 +9,7 @@ export function makeConfig(overrides: Partial<CjwConfig> = {}): CjwConfig {
     provider: "deepinfra",
     model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
     shellTimeoutSec: 30,
+    mcpServers: [],
     ...overrides,
   };
 }

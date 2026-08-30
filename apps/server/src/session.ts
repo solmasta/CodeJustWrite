@@ -5,12 +5,16 @@ import type { WebSocket } from "ws";
 import {
   Agent,
   ProviderRegistry,
+  allTools,
+  connectMcpServers,
   defaultModelFor,
   execSandboxed,
+  log,
   type CjwConfig,
   type ModelInfo,
   type ProviderName,
   type ToolContext,
+  type ToolDefinition,
 } from "@codejustwrite/core";
 import { redactSecrets, withGithubToken } from "./secrets.js";
 
@@ -34,7 +38,8 @@ export class Session {
   constructor(
     readonly repoRoot: string,
     private readonly registry: ProviderRegistry,
-    config: CjwConfig
+    config: CjwConfig,
+    mcpTools: ToolDefinition[] = []
   ) {
     this.provider = config.provider;
     this.model = config.model;
@@ -53,6 +58,7 @@ export class Session {
       getProvider: () => this.registry.get(this.provider),
       getModel: () => this.model,
       ctx,
+      tools: [...allTools, ...mcpTools],
       onTextDelta: (delta) => this.send({ type: "assistant_delta", text: delta }),
       onToolCall: (name, args) => this.send({ type: "tool_call", name, args }),
       onToolResult: (name, result, error) => this.send({ type: "tool_result", name, result, error }),
@@ -147,6 +153,10 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
   private registry: ProviderRegistry;
   private sweepTimer: NodeJS.Timeout;
+  /** Connected once and shared across every session — MCP servers are a deployment-wide
+   *  concern (same connectors regardless of which repo/session is asking), not per-session
+   *  state, so this avoids spawning a fresh stdio subprocess per session. */
+  private readonly mcp: ReturnType<typeof connectMcpServers>;
 
   constructor(
     private readonly workspacesDir: string,
@@ -155,6 +165,16 @@ export class SessionManager {
     private readonly maxSessions: number
   ) {
     this.registry = new ProviderRegistry(config);
+    this.mcp = connectMcpServers(config.mcpServers);
+    void this.mcp.then((mcp) => {
+      for (const status of mcp.statuses) {
+        if (status.connected) {
+          log.dim(`[mcp] ${status.name}: connected (${status.toolCount} tool(s))`);
+        } else {
+          log.error(`[mcp] ${status.name}: failed to connect — ${status.error}`);
+        }
+      }
+    });
     this.sweepTimer = setInterval(() => void this.sweep(), 60_000);
     this.sweepTimer.unref();
   }
@@ -185,13 +205,19 @@ export class SessionManager {
       );
     }
 
-    const session = new Session(dir, this.registry, this.config);
+    const mcpTools = (await this.mcp).tools;
+    const session = new Session(dir, this.registry, this.config, mcpTools);
     this.sessions.set(session.id, session);
     return session;
   }
 
   get(id: string): Session | undefined {
     return this.sessions.get(id);
+  }
+
+  /** Disconnects every configured MCP server (stdio subprocesses / HTTP sessions). Call on shutdown. */
+  async closeMcp(): Promise<void> {
+    await (await this.mcp).close();
   }
 
   async removeSession(id: string): Promise<void> {

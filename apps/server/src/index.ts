@@ -237,7 +237,7 @@ httpServer.on("upgrade", (req, socket, head) => {
 process.on("SIGTERM", () => {
   console.log("[cjw-server] SIGTERM received, shutting down gracefully");
   wss.close();
-  httpServer.close(() => process.exit(0));
+  void sessions.closeMcp().finally(() => httpServer.close(() => process.exit(0)));
 });
 
 httpServer.listen(serverConfig.port, () => {

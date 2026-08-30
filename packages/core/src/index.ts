@@ -18,6 +18,9 @@ export type {
 export { loadConfig, defaultModelFor } from "./config/config.js";
 export type { CjwConfig, ProviderName } from "./config/config.js";
 
+export { connectMcpServers } from "./mcp/connect.js";
+export type { McpServerConfig, McpServerStatus, McpConnections } from "./mcp/types.js";
+
 export { execSandboxed } from "./sandbox/exec.js";
 export type { ExecResult, ExecOptions } from "./sandbox/exec.js";
 export { createTestWorktree } from "./sandbox/workspace.js";
