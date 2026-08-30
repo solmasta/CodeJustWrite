@@ -18,103 +18,193 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-// ---------- Setup screen ----------
+// ---------- Sign-in screen ----------
 
-function renderSetup(errorMessage?: string): void {
+function renderSignIn(errorMessage?: string): void {
   app.innerHTML = "";
 
-  const repoInput = el("input", { placeholder: "https://github.com/you/repo.git", value: settings.repoUrl });
-  const branchInput = el("input", { placeholder: "main (optional)", value: settings.branch });
-  const tokenInput = el("input", { type: "password", placeholder: "server token (if required)", value: settings.token });
   const serverInput = el("input", {
     placeholder: "server URL (leave blank for same origin)",
     value: settings.serverUrl,
   });
-  const providerSelect = el(
-    "select",
-    {},
-    el("option", { value: "openai", textContent: "OpenAI" }),
-    el("option", { value: "deepinfra", textContent: "DeepInfra" }),
-    el("option", { value: "openrouter", textContent: "OpenRouter" })
-  );
-  providerSelect.value = settings.provider;
+  const tokenInput = el("input", { type: "password", placeholder: "server token (if required)", value: settings.token });
 
-  const browseBtn = el("button", { className: "secondary", textContent: "Browse my repos" });
-  const repoList = el("div", { className: "repo-list" });
+  const signInBtn = el("button", { className: "primary", textContent: "Continue" });
+  const skipBtn = el("button", { className: "secondary", textContent: "Skip sign-in" });
 
-  const startBtn = el("button", { className: "primary", textContent: "Start session" });
   const form = el(
     "div",
-    { className: "setup" },
+    { className: "setup sign-in" },
     el("h2", { textContent: "CodeJustWrite" }),
-    el("p", { textContent: "Point this at a repo and your backend, then start chatting with the agent." }),
+    el("p", { textContent: "Sign in to access your repositories." }),
     el("label", {}, "Server URL", serverInput),
     el("label", {}, "Access token", tokenInput),
+    ...(errorMessage ? [el("div", { className: "error", textContent: errorMessage })] : []),
+    el("div", { className: "btn-row" }, signInBtn, skipBtn)
+  );
+  app.append(form);
+
+  signInBtn.addEventListener("click", async () => {
+    const server = serverInput.value.trim();
+    const token = tokenInput.value.trim();
+    settings.serverUrl = server;
+    settings.token = token;
+    saveSettings(settings);
+
+    try {
+      const res = await fetch(`${httpBase(settings)}/api/auth/status`, {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderRepoSelect();
+    } catch (err) {
+      renderSignIn(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  skipBtn.addEventListener("click", () => {
+    settings.serverUrl = serverInput.value.trim();
+    settings.token = tokenInput.value.trim();
+    saveSettings(settings);
+    renderRepoSelect();
+  });
+}
+
+// ---------- Repository selection screen ----------
+
+function renderRepoSelect(errorMessage?: string): void {
+  app.innerHTML = "";
+
+  const repoInput = el("input", { placeholder: "https://github.com/you/repo.git", value: settings.repoUrl });
+  const branchInput = el("input", { placeholder: "main (optional)", value: settings.branch });
+  const searchInput = el("input", { placeholder: "Search repositories…", value: "" });
+  const repoList = el("div", { className: "repo-list" });
+  const recentList = el("div", { className: "repo-list recent" });
+  const statusDiv = el("div", { className: "repo-status" });
+
+  const browseBtn = el("button", { className: "secondary", textContent: "Browse my repos" });
+  const startBtn = el("button", { className: "primary", textContent: "Start session" });
+  const signOutBtn = el("button", { className: "text-btn", textContent: "Sign out" });
+
+  const form = el(
+    "div",
+    { className: "setup repo-select" },
+    el("h2", { textContent: "Choose a repository" }),
     el("label", {}, "Repo URL", repoInput),
     browseBtn,
     repoList,
+    statusDiv,
     el(
       "div",
       { className: "row" },
       el("label", {}, "Branch", branchInput),
-      el("label", {}, "Provider", providerSelect)
+      el("button", { className: "text-btn small", textContent: "Sign out" }, signOutBtn)
     ),
     ...(errorMessage ? [el("div", { className: "error", textContent: errorMessage })] : []),
     startBtn
   );
   app.append(form);
 
+  signOutBtn.addEventListener("click", () => {
+    settings.token = "";
+    saveSettings(settings);
+    renderSignIn();
+  });
+
   browseBtn.addEventListener("click", async () => {
-    const token = tokenInput.value.trim();
-    const server = serverInput.value.trim();
     repoList.innerHTML = "";
-    repoList.append(el("div", { className: "repo-status", textContent: "Loading repos…" }));
+    statusDiv.textContent = "Loading repositories…";
+    statusDiv.className = "repo-status";
 
     try {
-      const res = await fetch(`${httpBase({ ...settings, serverUrl: server })}/api/repos`, {
-        headers: token ? { authorization: `Bearer ${token}` } : {},
+      const res = await fetch(`${httpBase(settings)}/api/repos`, {
+        headers: settings.token ? { authorization: `Bearer ${settings.token}` } : {},
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-      repoList.innerHTML = "";
+      statusDiv.textContent = "";
       const repos = data.repos as { fullName: string; cloneUrl: string; defaultBranch: string; private: boolean }[];
       if (!repos.length) {
-        repoList.append(el("div", { className: "repo-status", textContent: "No repos found." }));
+        statusDiv.textContent = "No repositories found.";
         return;
       }
-      for (const repo of repos) {
-        const item = el(
-          "button",
-          { className: "repo-item", type: "button" },
-          el("span", { className: "name", textContent: repo.fullName }),
-          el("span", { className: "meta", textContent: repo.private ? "private" : "public" })
-        );
-        item.addEventListener("click", () => {
-          repoInput.value = repo.cloneUrl;
-          branchInput.value = repo.defaultBranch;
-          repoList.innerHTML = "";
-        });
-        repoList.append(item);
+
+      // Add search/filter functionality
+      const filterRepos = () => {
+        const query = searchInput.value.toLowerCase().trim();
+        repoList.innerHTML = "";
+        const filtered = query
+          ? repos.filter((r) => r.fullName.toLowerCase().includes(query))
+          : repos;
+        if (!filtered.length) {
+          repoList.append(el("div", { className: "repo-status", textContent: query ? "No matching repos." : "No repos found." }));
+          return;
+        }
+        for (const repo of filtered) {
+          const item = el(
+            "button",
+            { className: "repo-item", type: "button" },
+            el("span", { className: "name", textContent: repo.fullName }),
+            el("span", { className: "meta", textContent: repo.private ? "private" : "public" })
+          );
+          item.addEventListener("click", () => {
+            repoInput.value = repo.cloneUrl;
+            branchInput.value = repo.defaultBranch;
+            settings.repoUrl = repo.cloneUrl;
+            settings.branch = repo.defaultBranch;
+            saveSettings(settings);
+            // Add to recent
+            addRecentRepo(repo);
+          });
+          repoList.append(item);
+        }
+      };
+
+      // Add search input above the list
+      const searchContainer = el("div", { className: "search-container" }, searchInput);
+      form.insertBefore(searchContainer, browseBtn);
+      searchInput.addEventListener("input", filterRepos);
+      filterRepos();
+
+      // Show recent repos
+      const recent = getRecentRepos();
+      if (recent.length) {
+        recentList.innerHTML = "";
+        const header = el("div", { className: "section-header", textContent: "Recent" });
+        form.insertBefore(header, searchContainer);
+        form.insertBefore(recentList, searchContainer);
+        for (const repo of recent) {
+          const item = el(
+            "button",
+            { className: "repo-item", type: "button" },
+            el("span", { className: "name", textContent: repo.fullName }),
+            el("span", { className: "meta", textContent: repo.private ? "private" : "public" })
+          );
+          item.addEventListener("click", () => {
+            repoInput.value = repo.cloneUrl;
+            branchInput.value = repo.defaultBranch;
+            settings.repoUrl = repo.cloneUrl;
+            settings.branch = repo.defaultBranch;
+            saveSettings(settings);
+          });
+          recentList.append(item);
+        }
       }
     } catch (err) {
-      repoList.innerHTML = "";
-      repoList.append(
-        el("div", { className: "repo-status error", textContent: err instanceof Error ? err.message : String(err) })
-      );
+      statusDiv.textContent = err instanceof Error ? err.message : String(err);
+      statusDiv.className = "repo-status error";
     }
   });
 
   startBtn.addEventListener("click", async () => {
-    settings.serverUrl = serverInput.value.trim();
-    settings.token = tokenInput.value.trim();
     settings.repoUrl = repoInput.value.trim();
     settings.branch = branchInput.value.trim();
-    settings.provider = providerSelect.value as Settings["provider"];
     saveSettings(settings);
 
     if (!settings.repoUrl) {
-      renderSetup("Repo URL is required.");
+      renderRepoSelect("Repo URL is required.");
       return;
     }
 
@@ -137,9 +227,29 @@ function renderSetup(errorMessage?: string): void {
       saveSettings(settings);
       connect();
     } catch (err) {
-      renderSetup(err instanceof Error ? err.message : String(err));
+      renderRepoSelect(err instanceof Error ? err.message : String(err));
     }
   });
+}
+
+function getRecentRepos(): { fullName: string; cloneUrl: string; defaultBranch: string; private: boolean }[] {
+  try {
+    const raw = localStorage.getItem("cjw.recent");
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function addRecentRepo(repo: { fullName: string; cloneUrl: string; defaultBranch: string; private: boolean }): void {
+  try {
+    const recent = getRecentRepos().filter((r) => r.fullName !== repo.fullName);
+    recent.unshift(repo);
+    localStorage.setItem("cjw.recent", JSON.stringify(recent.slice(0, 5)));
+  } catch {
+    // localStorage unavailable
+  }
 }
 
 // ---------- Chat screen ----------
@@ -295,7 +405,7 @@ function openDrawer(): void {
     settings.sessionId = "";
     saveSettings(settings);
     socket?.close();
-    renderSetup();
+    renderRepoSelect();
   });
 
   document.body.append(backdrop, drawer);
@@ -383,6 +493,8 @@ function connect(): void {
 
 if (settings.sessionId) {
   connect();
+} else if (settings.token) {
+  renderRepoSelect();
 } else {
-  renderSetup();
+  renderSignIn();
 }
