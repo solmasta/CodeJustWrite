@@ -47,6 +47,31 @@ async function initSingleBranchClone(): Promise<string> {
   return clone;
 }
 
+/**
+ * Builds a shallow clone where main and feature share a real common ancestor, but neither
+ * branch's shallow-fetched history reaches it — reproducing the false "refusing to merge
+ * unrelated histories" a real shallow session clone hit against an actual old PicPocket branch.
+ */
+async function initUnrelatedHistoryClone(): Promise<string> {
+  const remote = await initRepo(); // C0
+  await fs.writeFile(path.join(remote, "main-only.txt"), "main change\n");
+  await run(remote, "git add -A && git commit -q -m main-commit"); // C1, child of C0
+
+  await run(remote, "git checkout -b feature HEAD~1 -q"); // branch off C0
+  await fs.writeFile(path.join(remote, "feature.txt"), "from feature\n");
+  await run(remote, "git add -A && git commit -q -m feature-commit"); // C2, sibling of C1
+  await run(remote, "git checkout main -q");
+
+  const clone = tempDir("cjw-git-shallow-");
+  // git silently ignores --depth for a plain filesystem path ("--depth is ignored in local
+  // clones"), so a file:// URL is required to actually get shallow-clone behavior here.
+  await run(path.dirname(clone), `git clone -q --depth 1 --branch main "file://${remote}" "${clone}"`);
+  // A subsequent fetch on an already-shallow repo still respects the original depth unless told
+  // otherwise, so this brings in only feature's tip — no shared history with main's tip either.
+  await run(clone, "git fetch -q origin feature:refs/remotes/origin/feature");
+  return clone;
+}
+
 describe("git tools", () => {
   let repo: string;
 
@@ -95,6 +120,26 @@ describe("git tools", () => {
     const ctx = makeCtx(clone);
     await expect(gitMergeTool.run({ branch: "feature" }, ctx)).rejects.toThrow();
   });
+
+  it(
+    "git_merge recovers from a shallow clone's false 'unrelated histories' by unshallowing and retrying",
+    async () => {
+      const clone = await initUnrelatedHistoryClone();
+      const ctx = makeCtx(clone);
+
+      const isShallow = await execSandboxed("git rev-parse --is-shallow-repository", { cwd: clone, timeoutSec: 10 });
+      expect(isShallow.stdout.trim()).toBe("true");
+
+      // A plain merge attempt would throw "refusing to merge unrelated histories" here — the
+      // tool should recover from that on its own rather than surface it as a merge failure.
+      await gitMergeTool.run({ branch: "origin/feature" }, ctx);
+
+      const files = await fs.readdir(clone);
+      expect(files).toContain("main-only.txt");
+      expect(files).toContain("feature.txt");
+    },
+    20000
+  );
 
   it("git_fetch then git_checkout then git_merge brings in a branch not present in a single-branch clone", async () => {
     const clone = await initSingleBranchClone();
