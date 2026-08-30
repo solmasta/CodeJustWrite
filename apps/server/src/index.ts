@@ -38,6 +38,13 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", requireAuth(serverConfig.authToken));
 
+app.get("/api/auth/status", (_req, res) => {
+  res.json({
+    authenticated: true,
+    hasGithubToken: Boolean(agentConfig.githubToken),
+  });
+});
+
 app.get("/api/repos", async (_req, res) => {
   if (!agentConfig.githubToken) {
     res.status(400).json({ error: "GITHUB_TOKEN is not configured on the server." });
