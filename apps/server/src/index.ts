@@ -119,6 +119,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Initialize SessionManager with proper arguments
 const sessions = new SessionManager(WORKSPACES_DIR, config, SESSION_TTL_MINUTES * 60 * 1000, MAX_SESSIONS);
 
 // Enhanced health check endpoint
