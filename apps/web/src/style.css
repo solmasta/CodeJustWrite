@@ -228,6 +228,15 @@ body {
 
 .setup h2 {
   margin: 0 0 4px;
+  font-size: 24px;
+  text-align: center;
+}
+
+.setup p {
+  margin: 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
 }
 
 .setup label {
@@ -268,9 +277,18 @@ body {
   cursor: pointer;
 }
 
+.setup button.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .setup .error {
   color: var(--danger);
   font-size: 13px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #3f1d1d;
+  text-align: center;
 }
 
 .setup button.secondary {
@@ -283,6 +301,72 @@ body {
   cursor: pointer;
 }
 
+.setup button.text-btn {
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.setup button.text-btn:hover {
+  color: var(--text);
+}
+
+.setup button.text-btn.small {
+  font-size: 12px;
+  padding: 4px 8px;
+  text-decoration: none;
+}
+
+/* Sign-in screen */
+.setup.sign-in {
+  justify-content: center;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.setup.sign-in .btn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Repo select screen */
+.setup.repo-select {
+  justify-content: flex-start;
+}
+
+.setup .section-header {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 8px;
+}
+
+.setup .search-container {
+  position: relative;
+}
+
+.setup .search-container input {
+  width: 100%;
+  padding-left: 36px;
+}
+
+.setup .search-container::before {
+  content: "🔍";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+/* Repo list */
 .repo-list {
   display: flex;
   flex-direction: column;
@@ -293,6 +377,10 @@ body {
 
 .repo-list:empty {
   display: none;
+}
+
+.repo-list.recent {
+  max-height: 120px;
 }
 
 .repo-item {
@@ -308,6 +396,12 @@ body {
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.repo-item:hover {
+  border-color: var(--accent-dim);
+  background: #1f2d44;
 }
 
 .repo-item .name {
@@ -326,6 +420,7 @@ body {
   font-size: 13px;
   color: var(--text-dim);
   padding: 4px 2px;
+  text-align: center;
 }
 
 .repo-status.error {
@@ -354,6 +449,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.drawer h2 {
+  margin: 0;
+}
+
+.drawer .sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
 }
 
 .toggle-row {
@@ -405,6 +510,7 @@ body {
 }
 
 .danger-btn {
+  margin-top: auto;
   padding: 10px;
   border-radius: 10px;
   border: 1px solid #7f1d1d;
