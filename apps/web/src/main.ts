@@ -31,7 +31,7 @@ const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
 const modelInput = el<HTMLInputElement>("#model");
-const modelOptions = el<HTMLDataListElement>("#modelOptions");
+const modelSelect = el<HTMLSelectElement>("#modelSelect");
 const modelHint = el<HTMLParagraphElement>("#modelHint");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
@@ -297,19 +297,24 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case "models": {
       const provider = String((msg as { provider?: string }).provider ?? "");
-      // Ignore a response to a provider the dropdown has since moved away from.
+      // Ignore a response to a provider the picker has since moved away from.
       if (provider !== modelsRequestedFor || provider !== providerSelect.value) break;
       const models = msg.models ?? [];
-      modelOptions.innerHTML = "";
+      modelSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = models.length ? "— pick a model —" : "No models found";
+      modelSelect.appendChild(placeholder);
       for (const m of models) {
         const option = document.createElement("option");
         option.value = m.id;
-        modelOptions.appendChild(option);
+        option.textContent = m.id;
+        modelSelect.appendChild(option);
       }
       text(
         modelHint,
         models.length
-          ? `${models.length} models available for ${provider} — start typing to filter, or paste any model id.`
+          ? `${models.length} models available for ${provider} — pick one below, or type any model id above.`
           : `Couldn't load the model list for ${provider}. Type a model id manually.`
       );
       break;
@@ -400,6 +405,7 @@ function refreshModels(): void {
   if (!connection) return;
   const provider = providerSelect.value;
   modelsRequestedFor = provider;
+  modelSelect.innerHTML = '<option value="">Loading…</option>';
   text(modelHint, "Loading available models…");
   show(modelHint);
   connection.send({ type: "list_models", provider });
@@ -469,6 +475,11 @@ function init(): void {
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
+  modelSelect.addEventListener("change", () => {
+    if (!modelSelect.value) return;
+    modelInput.value = modelSelect.value;
+    modelSelect.selectedIndex = 0; // one-shot picker — the text input above is the source of truth
+  });
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });

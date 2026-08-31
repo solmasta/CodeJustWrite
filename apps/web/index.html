@@ -109,8 +109,13 @@
         
         <label>
           Model
-          <input type="text" id="model" list="modelOptions" placeholder="meta-llama/Meta-Llama-3.1-70B-Instruct" autocomplete="off" />
-          <datalist id="modelOptions"></datalist>
+          <input type="text" id="model" placeholder="meta-llama/Meta-Llama-3.1-70B-Instruct" autocomplete="off" />
+        </label>
+        <label>
+          Pick from list
+          <select id="modelSelect">
+            <option value="">Loading…</option>
+          </select>
         </label>
         <p id="modelHint" class="hint"></p>
 

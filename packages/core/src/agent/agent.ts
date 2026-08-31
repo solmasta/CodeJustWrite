@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { ChatMessage, LLMProvider } from "../providers/types.js";
 import { allTools } from "./tools/index.js";
 import type { ToolContext, ToolDefinition } from "./tools/index.js";
+import { parseFakeToolCall } from "./fakeToolCall.js";
 import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const MAX_TOOL_ITERATIONS = 25;
@@ -21,10 +23,12 @@ export class Agent {
   private history: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
   private readonly tools: ToolDefinition[];
   private readonly toolsByName: Map<string, ToolDefinition>;
+  private readonly toolNames: Set<string>;
 
   constructor(private deps: AgentDeps) {
     this.tools = deps.tools ?? allTools;
     this.toolsByName = new Map(this.tools.map((t) => [t.spec.name, t]));
+    this.toolNames = new Set(this.toolsByName.keys());
   }
 
   getHistory(): ChatMessage[] {
@@ -50,10 +54,21 @@ export class Agent {
 
       this.history.push(result.message);
 
-      const toolCalls = result.message.toolCalls;
+      let toolCalls = result.message.toolCalls;
       if (result.finishReason !== "tool_calls" || !toolCalls?.length) {
-        finalText = result.message.content ?? "";
-        break;
+        // Some models never use real function-calling and instead write out a plain-text reply
+        // that's just what a tool call would look like — the API sees an ordinary finished turn,
+        // so nothing executes and the conversation stalls with the raw JSON as the "answer".
+        // Recover that into a real call so the loop can actually run it and keep going.
+        const recovered = parseFakeToolCall(result.message.content, this.toolNames);
+        if (!recovered) {
+          finalText = result.message.content ?? "";
+          break;
+        }
+        const syntheticCall = { id: randomUUID(), name: recovered.name, arguments: JSON.stringify(recovered.arguments) };
+        result.message.content = null;
+        result.message.toolCalls = [syntheticCall];
+        toolCalls = [syntheticCall];
       }
 
       for (const call of toolCalls) {
