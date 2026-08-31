@@ -56,3 +56,16 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
 }
+
+/**
+ * A replayable record of one visible chat event, persisted per-session (see settings.ts) so a
+ * page reload/refresh restores what was on screen instead of showing a blank chat — the
+ * underlying WebSocket session (and the agent's own memory of the conversation) survives a
+ * refresh already; only the client's rendered view of it didn't.
+ */
+export type TranscriptEntry =
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; text: string }
+  | { kind: "system"; text: string }
+  | { kind: "tool"; name: string; args: unknown; result?: string; error?: boolean }
+  | { kind: "confirm"; callId: string; question: string; decided?: "approved" | "denied" };
