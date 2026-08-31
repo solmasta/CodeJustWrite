@@ -122,7 +122,11 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
     },
 
     async listModels(): Promise<ModelInfo[]> {
-      const page = await client.models.list();
+      // The SDK's default request timeout is 10 minutes — fine for a chat completion, but this
+      // backs a UI dropdown someone is actively waiting on. If the provider's /models endpoint is
+      // slow or hanging rather than erroring outright, fail fast with a clear error instead of
+      // leaving the settings UI stuck on "Loading…" for minutes with nothing to show for it.
+      const page = await client.models.list({ timeout: 15_000 });
       const models: ModelInfo[] = [];
       for await (const m of page) {
         models.push({ id: m.id });
