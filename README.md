@@ -207,6 +207,24 @@ Set `CJW_MCP_SERVERS` to a JSON array, one entry per server:
   is skipped with a logged warning rather than breaking the rest of the
   agent's tools — check `/mcp` (CLI) or the server's startup log for status.
 
+### When a model doesn't actually call tools
+
+Some models — especially smaller or older ones — don't reliably use the
+API's real function-calling mechanism even when given the full tool list:
+instead of a proper tool call, they write a plain-text reply whose entire
+content is just what a tool call *would* look like (e.g.
+`{"name": "list_dir", "arguments": {"path": "."}}`, or the same thing
+wrapped in `{"type": "function", ...}` or a markdown code fence). Left
+alone, that's a silent failure — the API sees an ordinary finished turn, so
+nothing executes and the conversation stalls with the raw JSON as the
+"answer" instead of real results. The agent recognizes that specific shape
+(only when the name matches a real registered tool, so it never swallows a
+genuine answer that happens to include a JSON example) and runs it as if it
+had been a real tool call. If you see this happening often, it's a sign the
+current model isn't a great fit for this agent — switch to one with
+stronger tool-calling via `/models` (CLI) or the model dropdown (PWA
+settings).
+
 ## Development
 
 ```bash
