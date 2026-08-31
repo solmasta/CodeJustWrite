@@ -290,6 +290,16 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "error": {
+      // A failed list_models request (e.g. the provider's key isn't configured, or its /models
+      // endpoint errored or timed out) rejects with a plain "error" message, same as any other
+      // server-side failure — with no fix, it'd only ever show up as a chat bubble the user might
+      // not even scroll back to, while Settings stayed stuck on "Loading available models…"
+      // forever with no visible explanation right where they were actually looking.
+      if (modelsRequestedFor) {
+        text(modelHint, `Couldn't load models: ${String(msg.message ?? "unknown error")}`);
+        modelSelect.innerHTML = '<option value="">(failed to load — type a model id manually)</option>';
+        modelsRequestedFor = null;
+      }
       addBubble("system", `Error: ${String(msg.message ?? "Unknown error")}`);
       typingIndicator.classList.add("hidden");
       isProcessing = false;
