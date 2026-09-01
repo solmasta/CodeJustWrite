@@ -9,7 +9,7 @@ const defaults: Settings = {
   repoUrl: "",
   branch: "",
   provider: "deepinfra",
-  model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+  model: "moonshotai/Kimi-K3",
   autoApprove: false,
   recentRepos: [],
 };

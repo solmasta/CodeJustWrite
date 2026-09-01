@@ -43,7 +43,7 @@ cjw
 npm run dev:cli
 ```
 
-Or pick a provider/model at launch: `cjw --provider deepinfra --model meta-llama/Meta-Llama-3.1-70B-Instruct`
+Or pick a provider/model at launch: `cjw --provider deepinfra --model moonshotai/Kimi-K3`
 
 ### Slash commands
 
