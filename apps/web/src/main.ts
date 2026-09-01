@@ -30,7 +30,6 @@ const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
-const modelInput = el<HTMLInputElement>("#model");
 const modelSelect = el<HTMLSelectElement>("#modelSelect");
 const modelHint = el<HTMLParagraphElement>("#modelHint");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
@@ -297,7 +296,10 @@ function handleServerMessage(msg: ServerMessage): void {
       // forever with no visible explanation right where they were actually looking.
       if (modelsRequestedFor) {
         text(modelHint, `Couldn't load models: ${String(msg.message ?? "unknown error")}`);
-        modelSelect.innerHTML = '<option value="">(failed to load — type a model id manually)</option>';
+        const current = settings.provider === modelsRequestedFor ? settings.model : "";
+        modelSelect.innerHTML = current
+          ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
+          : '<option value="">(no models available)</option>';
         modelsRequestedFor = null;
       }
       addBubble("system", `Error: ${String(msg.message ?? "Unknown error")}`);
@@ -310,22 +312,39 @@ function handleServerMessage(msg: ServerMessage): void {
       // Ignore a response to a provider the picker has since moved away from.
       if (provider !== modelsRequestedFor || provider !== providerSelect.value) break;
       const models = msg.models ?? [];
+      const current = settings.provider === provider ? settings.model : "";
       modelSelect.innerHTML = "";
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = models.length ? "— pick a model —" : "No models found";
-      modelSelect.appendChild(placeholder);
+      if (!models.length) {
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "No models found";
+        modelSelect.appendChild(placeholder);
+      }
+      let currentIncluded = false;
       for (const m of models) {
         const option = document.createElement("option");
         option.value = m.id;
         option.textContent = m.id;
+        if (m.id === current) {
+          option.selected = true;
+          currentIncluded = true;
+        }
         modelSelect.appendChild(option);
+      }
+      // The saved model may no longer be in the provider's live catalog (e.g. deprecated) —
+      // keep it selectable rather than silently swapping it for whatever sorts first.
+      if (current && !currentIncluded) {
+        const option = document.createElement("option");
+        option.value = current;
+        option.textContent = `${current} (current)`;
+        option.selected = true;
+        modelSelect.insertBefore(option, modelSelect.firstChild);
       }
       text(
         modelHint,
         models.length
-          ? `${models.length} models available for ${provider} — pick one below, or type any model id above.`
-          : `Couldn't load the model list for ${provider}. Type a model id manually.`
+          ? `${models.length} models available for ${provider}.`
+          : `Couldn't load the model list for ${provider}.`
       );
       break;
     }
@@ -398,7 +417,6 @@ let modelsRequestedFor: string | null = null;
 
 function openSettings(): void {
   providerSelect.value = settings.provider || "deepinfra";
-  modelInput.value = settings.model || "";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   settingsModal.showModal();
   refreshModels();
@@ -409,13 +427,17 @@ function closeSettings(): void {
 }
 
 /** Fetches the live model catalog for whichever provider is currently selected in the dropdown,
- *  so the model field's suggestions reflect what that provider actually offers right now (Claude
- *  models included, for OpenRouter) instead of a value someone has to already know and type. */
+ *  so the model list reflects what that provider actually offers right now (Claude models
+ *  included, for OpenRouter) instead of a value someone has to already know and type — this also
+ *  keeps a deprecated/renamed model from lingering unnoticed as a hand-typed string. */
 function refreshModels(): void {
   if (!connection) return;
   const provider = providerSelect.value;
   modelsRequestedFor = provider;
-  modelSelect.innerHTML = '<option value="">Loading…</option>';
+  const current = settings.provider === provider ? settings.model : "";
+  modelSelect.innerHTML = current
+    ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
+    : '<option value="">Loading…</option>';
   text(modelHint, "Loading available models…");
   show(modelHint);
   connection.send({ type: "list_models", provider });
@@ -424,7 +446,7 @@ function refreshModels(): void {
 function saveSettings(): void {
   const previousProvider = settings.provider;
   const provider = providerSelect.value as Settings["provider"];
-  const model = modelInput.value;
+  const model = modelSelect.value || settings.model;
   const autoApprove = autoApproveCheck.checked;
 
   persistSettings({ provider, model, autoApprove });
@@ -485,11 +507,6 @@ function init(): void {
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
-  modelSelect.addEventListener("change", () => {
-    if (!modelSelect.value) return;
-    modelInput.value = modelSelect.value;
-    modelSelect.selectedIndex = 0; // one-shot picker — the text input above is the source of truth
-  });
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });
