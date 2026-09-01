@@ -7,7 +7,7 @@ import type { CjwConfig } from "../src/config/config.js";
 export function makeConfig(overrides: Partial<CjwConfig> = {}): CjwConfig {
   return {
     provider: "deepinfra",
-    model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    model: "moonshotai/Kimi-K3",
     shellTimeoutSec: 30,
     mcpServers: [],
     ...overrides,
