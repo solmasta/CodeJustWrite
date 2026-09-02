@@ -36,6 +36,7 @@ const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
+const saveToDriveBtn = el<HTMLButtonElement>("#saveToDriveBtn");
 
 const confirmModal = el<HTMLDialogElement>("#confirmModal");
 const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
@@ -67,6 +68,7 @@ let settings: Settings = loadSettings();
 let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let livenessTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Cancels any pending debounced draft save — must run alongside every clearDraft() call, or a
  *  save scheduled just before the clear (e.g. typing right up to hitting Send) can still fire
@@ -266,6 +268,69 @@ function connectWebSocket(sessionId: string): void {
   });
 
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
+  void refreshSaveToDriveVisibility();
+}
+
+/** Shows the "Save to Drive" button only once the server actually has Google Drive credentials
+ *  configured — the feature requires a one-time interactive setup (see /api/google/connect) that
+ *  won't be done on every deploy, so the button needs to stay hidden rather than offering an
+ *  action that would just fail. */
+async function refreshSaveToDriveVisibility(): Promise<void> {
+  try {
+    const res = await apiFetch(settings, "/api/google/status");
+    const data = await res.json();
+    saveToDriveBtn.classList.toggle("hidden", !data.configured);
+  } catch {
+    saveToDriveBtn.classList.add("hidden");
+  }
+}
+
+async function saveToDrive(): Promise<void> {
+  const active = loadActiveSession();
+  if (!active || saveToDriveBtn.disabled) return;
+  saveToDriveBtn.disabled = true;
+  const originalLabel = saveToDriveBtn.textContent;
+  saveToDriveBtn.textContent = "⏳";
+  try {
+    const res = await apiFetch(settings, `/api/session/${active.sessionId}/backup`, {
+      method: "POST",
+      body: JSON.stringify({ repoName: active.repoName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Backup failed");
+    addBubble(
+      "system",
+      `Saved a backup of this conversation to Google Drive (CodeJustWrite Backups/${active.repoName}).` +
+        (data.webViewLink ? ` ${data.webViewLink}` : "")
+    );
+  } catch (e) {
+    addBubble("system", `Couldn't save to Drive: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    saveToDriveBtn.disabled = false;
+    saveToDriveBtn.textContent = originalLabel;
+  }
+}
+
+/** A backgrounded mobile tab (minimized, switched away from) can have its WebSocket silently
+ *  killed by the OS/browser without ever firing a close event — readyState can keep reporting
+ *  OPEN indefinitely even though nothing will ever arrive again, so the normal onclose-triggered
+ *  backoff reconnect never kicks in and the app is left looking "connected" while actually inert
+ *  (isProcessing/typingIndicator stuck in whatever state they were in when backgrounded). Call
+ *  this the moment the app comes back to the foreground: if the connection isn't even claiming
+ *  to be open, reconnect immediately; if it is, send a ping and give it a few seconds to answer
+ *  before assuming it's a zombie and forcing a fresh connection. */
+function checkConnectionAlive(): void {
+  if (!connection) return;
+  if (!connection.isConnected()) {
+    connection.reconnectNow();
+    return;
+  }
+  if (livenessTimer) clearTimeout(livenessTimer);
+  connection.send({ type: "ping" });
+  livenessTimer = setTimeout(() => {
+    livenessTimer = null;
+    connection?.reconnectNow();
+  }, 4000);
 }
 
 function handleServerMessage(msg: ServerMessage): void {
@@ -296,6 +361,13 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case "history": {
       replayHistory(msg.entries, !!msg.assistantOpen);
+      break;
+    }
+    case "pong": {
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = null;
+      }
       break;
     }
     case "assistant_delta": {
@@ -678,6 +750,7 @@ function init(): void {
   });
 
   settingsBtn.addEventListener("click", openSettings);
+  saveToDriveBtn.addEventListener("click", () => void saveToDrive());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
@@ -690,6 +763,16 @@ function init(): void {
   });
 
   changeRepoBtn.addEventListener("click", backToRepoPicker);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkConnectionAlive();
+  });
+  // Safari can restore a page from the back/forward cache (bfcache) instead of doing a full
+  // reload when a backgrounded PWA tab resumes — event.persisted marks that case, where
+  // visibilitychange alone may not have fired since the page was frozen rather than hidden.
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) checkConnectionAlive();
+  });
 
   signOutBtn.addEventListener("click", () => {
     void endSession();
