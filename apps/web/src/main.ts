@@ -47,6 +47,7 @@ const recentReposList = el<HTMLDivElement>("#recentReposList");
 let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
 let lastToolCard: HTMLDivElement | null = null;
+let lastToolName = "";
 let settings: Settings = loadSettings();
 let isProcessing = false;
 
@@ -260,32 +261,25 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "tool_call": {
-      lastToolCard = addToolCard(String(msg.name), msg.args);
+      lastToolName = String(msg.name);
+      lastToolCard = addToolCard(lastToolName, msg.args);
       typingIndicator.classList.remove("hidden");
       break;
     }
     case "tool_result": {
       const card = lastToolCard;
       if (card) {
-        const status = card.querySelector(".status");
-        const body = card.querySelector(".body");
-        if (status) {
-          status.textContent = msg.error ? "error" : "done";
-          status.className = `status ${msg.error ? "err" : "ok"}`;
-        }
-        if (body) body.textContent += `\n\n${String(msg.result ?? "")}`;
+        setCardStatus(card, msg.error ? "error" : "done", msg.error ? "err" : "ok");
+        appendToolOutput(card, String(msg.result ?? ""));
       }
       break;
     }
     case "diff": {
-      if (lastToolCard) {
-        const body = lastToolCard.querySelector(".body");
-        if (body) body.textContent += `\n\n${String(msg.text ?? "")}`;
-      }
+      if (lastToolCard) appendToolOutput(lastToolCard, String(msg.text ?? ""));
       break;
     }
     case "awaiting_confirmation": {
-      addConfirmCard(String(msg.callId), String(msg.question ?? "Allow this action?"));
+      if (lastToolCard) showConfirmInCard(lastToolCard, String(msg.callId), lastToolName);
       break;
     }
     case "error": {
@@ -360,38 +354,91 @@ function addBubble(role: "user" | "assistant" | "system", content: string): HTML
   return div;
 }
 
+/** Picks one argument to show inline next to the tool name, the way Claude Code's own terminal
+ *  UI shows e.g. "Write(file.ts)" instead of the tool's full raw argument JSON — the latter used
+ *  to dump an entire file's contents into the chat feed for write_file/edit_file, which is what
+ *  buried the approve/deny buttons under a wall of text on any non-trivial change. */
+function primaryArgSummary(args: Record<string, unknown>): string {
+  const preferredKeys = ["path", "pattern", "command", "url", "branch", "title", "message", "script", "pullNumber"];
+  for (const key of preferredKeys) {
+    const value = args[key];
+    if (value === undefined || value === null || value === "") continue;
+    const s = String(value);
+    return s.length > 60 ? s.slice(0, 57) + "…" : s;
+  }
+  return "";
+}
+
+function setCardStatus(card: HTMLDivElement, label: string, cls: "ok" | "err" | "wait" | ""): void {
+  const status = card.querySelector(".status") as HTMLElement;
+  status.textContent = label;
+  status.className = `status ${cls}`;
+}
+
+/** Appends to the card's collapsed-by-default output pane and keeps its toggle label's line
+ *  count current, revealing the toggle the first time there's anything to show. */
+function appendToolOutput(card: HTMLDivElement, chunk: string): void {
+  if (!chunk) return;
+  const body = card.querySelector(".body") as HTMLElement;
+  const toggle = card.querySelector(".tc-toggle") as HTMLButtonElement;
+  body.textContent = body.textContent ? `${body.textContent}\n\n${chunk}` : chunk;
+  const lineCount = body.textContent.split("\n").length;
+  const expanded = toggle.getAttribute("aria-expanded") === "true";
+  toggle.textContent = `⎿ ${lineCount} line${lineCount === 1 ? "" : "s"} — tap to ${expanded ? "collapse" : "expand"}`;
+  show(toggle);
+}
+
 function addToolCard(name: string, args: unknown): HTMLDivElement {
+  const argsObj = (args && typeof args === "object" ? (args as Record<string, unknown>) : {});
+  const summary = primaryArgSummary(argsObj);
   const card = document.createElement("div");
   card.className = "tool-card";
   card.innerHTML = `
-    <div class="head"><span>→ ${escapeHtml(name)}</span><span class="status">running…</span></div>
-    <div class="body">${escapeHtml(JSON.stringify(args))}</div>
+    <div class="tc-head">
+      <span class="tc-icon">⏺</span>
+      <span class="tc-name">${escapeHtml(name)}</span>
+      ${summary ? `<span class="tc-arg">${escapeHtml(summary)}</span>` : ""}
+      <span class="status">running…</span>
+    </div>
+    <div class="tc-confirm hidden"></div>
+    <button type="button" class="tc-toggle hidden" aria-expanded="false"></button>
+    <pre class="body hidden"></pre>
   `;
   chatHistory.appendChild(card);
   scrollToBottom();
+
+  const toggle = card.querySelector(".tc-toggle") as HTMLButtonElement;
+  const body = card.querySelector(".body") as HTMLElement;
+  toggle.addEventListener("click", () => {
+    const expanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", String(!expanded));
+    body.classList.toggle("hidden", expanded);
+    toggle.textContent = toggle.textContent.replace(expanded ? "collapse" : "expand", expanded ? "expand" : "collapse");
+  });
   return card;
 }
 
-function addConfirmCard(callId: string, question: string): void {
-  const card = document.createElement("div");
-  card.className = "tool-card";
-  card.innerHTML = `
-    <div class="head"><span>⚠ confirm</span><span class="status">awaiting approval</span></div>
-    <div class="body">${escapeHtml(question)}</div>
+/** Merges the approve/deny UI into the same card as the tool call it belongs to, directly under
+ *  the one-line header — rather than a separate card appended afterward, which pushed the buttons
+ *  below whatever output/diff had already piled up by the time approval was needed. */
+function showConfirmInCard(card: HTMLDivElement, callId: string, toolName: string): void {
+  setCardStatus(card, "awaiting approval", "wait");
+  const confirmBox = card.querySelector(".tc-confirm") as HTMLElement;
+  confirmBox.innerHTML = `
+    <p class="tc-question">Allow ${escapeHtml(toolName)}?</p>
     <div class="confirm-row">
       <button type="button" class="approve">Approve</button>
       <button type="button" class="deny">Deny</button>
     </div>
   `;
-  chatHistory.appendChild(card);
+  show(confirmBox);
   scrollToBottom();
 
-  const status = card.querySelector(".status") as HTMLElement;
-  const row = card.querySelector(".confirm-row") as HTMLElement;
   const decide = (approved: boolean) => {
     connection?.send({ type: "tool_decision", callId, approved });
-    status.textContent = approved ? "approved" : "denied";
-    row.remove();
+    setCardStatus(card, approved ? "approved" : "denied", approved ? "ok" : "err");
+    confirmBox.innerHTML = "";
+    hide(confirmBox);
   };
   card.querySelector(".approve")?.addEventListener("click", () => decide(true));
   card.querySelector(".deny")?.addEventListener("click", () => decide(false));
