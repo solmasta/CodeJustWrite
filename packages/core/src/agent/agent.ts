@@ -44,8 +44,13 @@ export interface AgentDeps {
    *  real usage; pass overrides mainly to keep test fixtures small. */
   compaction?: CompactionConfig;
   onTextDelta?: (delta: string) => void;
-  onToolCall?: (name: string, args: Record<string, unknown>) => void;
-  onToolResult?: (name: string, result: string, error: boolean) => void;
+  /** callId identifies which call this is within its batch — a UI needs it to correlate this
+   *  event with the right on-screen card, since parallel batches (see executeToolCalls) can fire
+   *  several onToolCall events before any of their onToolResult events arrive; relying on "the
+   *  most recently created card" silently attaches results to the wrong card once more than one
+   *  call is ever in flight at once. */
+  onToolCall?: (name: string, args: Record<string, unknown>, callId: string) => void;
+  onToolResult?: (name: string, result: string, error: boolean, callId: string) => void;
 }
 
 export class Agent {
@@ -164,8 +169,11 @@ export class Agent {
    *  x3, or a read alongside run_tests) — it doesn't reduce token usage, since the model still
    *  only sees one round of results either way. Results are still applied — onToolResult fired,
    *  history pushed — in the original request order regardless of which call actually finishes
-   *  first, so callback/history ordering stays identical to the serial path and the client's
-   *  tool-card correlation needs no changes.
+   *  first, so history ordering stays identical to the serial path. Callback ordering is a
+   *  different story: a concurrent batch fires every onToolCall up front, before any of their
+   *  onToolResult — a UI correlating "this result" to "whichever card was created most recently"
+   *  (valid only under strict serial execution) will attach it to the wrong card. Callers must
+   *  key off the callId argument now passed to both callbacks instead.
    *
    *  Deliberately NOT extended to confirmation-requiring tools (write_file, edit_file,
    *  delete_file, any git mutation, etc.), even ones that touch clearly distinct resources (two
@@ -209,7 +217,7 @@ export class Agent {
     const tool = this.toolsByName.get(call.name);
     const args = this.parseArgs(call.arguments);
 
-    this.deps.onToolCall?.(call.name, args);
+    this.deps.onToolCall?.(call.name, args, call.id);
 
     if (!tool) {
       return { output: `Error: unknown tool "${call.name}"`, error: true };
@@ -238,7 +246,7 @@ export class Agent {
     call: { id: string; name: string },
     run: { output: string; images?: string[]; error: boolean }
   ): void {
-    this.deps.onToolResult?.(call.name, run.output, run.error);
+    this.deps.onToolResult?.(call.name, run.output, run.error, call.id);
     this.history.push({ role: "tool", toolCallId: call.id, name: call.name, content: run.output });
     if (run.images?.length) {
       // A tool-role message can't carry images in the OpenAI-compatible wire format — this is

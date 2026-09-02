@@ -263,12 +263,18 @@ describe("Agent running independent read-only tool calls in parallel", () => {
       { message: { role: "assistant", content: "done" }, finishReason: "stop" },
     ]);
     const resultEvents: string[] = [];
+    const resultCallIds: string[] = [];
+    const callCallIds: string[] = [];
     const agent = new Agent({
       getProvider: () => provider,
       getModel: () => "test-model",
       ctx: makeCtx(),
       tools,
-      onToolResult: (name) => resultEvents.push(name),
+      onToolCall: (_name, _args, callId) => callCallIds.push(callId),
+      onToolResult: (name, _result, _error, callId) => {
+        resultEvents.push(name);
+        resultCallIds.push(callId);
+      },
     });
 
     const start = Date.now();
@@ -281,10 +287,16 @@ describe("Agent running independent read-only tool calls in parallel", () => {
     // The fastest tool (read_file_2, 10ms) actually finishes first under the hood...
     expect(finishOrder[0]).toBe(2);
     // ...but callbacks/history are still reported in the original request order (1, 2, 3), not
-    // completion order, so the client's tool-card correlation never has to change.
+    // completion order.
     expect(resultEvents).toEqual(["read_file_1", "read_file_2", "read_file_3"]);
+    // Every onToolCall fires before any onToolResult in a concurrent batch — a client can't rely
+    // on "the most recently created card" to find the right one for a result. Each result's
+    // callId must instead match its own call's id, not whichever call happened to be last.
+    expect(callCallIds).toEqual(["c1", "c2", "c3"]);
+    expect(resultCallIds).toEqual(["c1", "c2", "c3"]);
     const toolMessages = agent.getHistory().filter((m) => m.role === "tool");
     expect(toolMessages.map((m) => m.name)).toEqual(["read_file_1", "read_file_2", "read_file_3"]);
+    expect(toolMessages.map((m) => m.toolCallId)).toEqual(["c1", "c2", "c3"]);
   });
 
   it("keeps a batch with any non-readOnly call fully sequential", async () => {

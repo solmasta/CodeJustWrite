@@ -51,6 +51,10 @@ let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
 let lastToolCard: HTMLDivElement | null = null;
 let lastToolName = "";
+/** Correlates a tool_result event to the card its tool_call created, by callId — needed because
+ *  a concurrent batch of tool calls fires all of its tool_call events before any of their
+ *  tool_result events, so lastToolCard alone can no longer identify the right card. */
+const toolCardsByCallId = new Map<string, HTMLDivElement>();
 let settings: Settings = loadSettings();
 let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
@@ -276,11 +280,19 @@ function handleServerMessage(msg: ServerMessage): void {
     case "tool_call": {
       lastToolName = String(msg.name);
       lastToolCard = addToolCard(lastToolName, msg.args);
+      // Concurrent batches (see Agent.executeToolCalls on the server) can fire several tool_call
+      // events before any of their tool_result events arrive, so "the most recently created
+      // card" (lastToolCard) is no longer a safe way to find the right one for a result — key by
+      // callId instead. diff/awaiting_confirmation still use lastToolCard: those only ever occur
+      // for confirmation-requiring tools, which never run in a concurrent batch, so that pairing
+      // stays strictly sequential and correct.
+      if (msg.callId) toolCardsByCallId.set(msg.callId, lastToolCard);
       typingIndicator.classList.remove("hidden");
       break;
     }
     case "tool_result": {
-      const card = lastToolCard;
+      const card = (msg.callId && toolCardsByCallId.get(msg.callId)) || lastToolCard;
+      if (msg.callId) toolCardsByCallId.delete(msg.callId);
       if (card) {
         setCardStatus(card, msg.error ? "error" : "done", msg.error ? "err" : "ok");
         appendToolOutput(card, String(msg.result ?? ""));
