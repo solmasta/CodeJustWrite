@@ -147,6 +147,7 @@ export const runTestsTool: ToolDefinition = {
     },
   },
   requiresConfirmation: false,
+  isolatedResource: true,
   async run(args, ctx) {
     const script = args.script ? String(args.script) : "test";
     const wt = await createTestWorktree(ctx.repoRoot);

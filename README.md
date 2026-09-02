@@ -203,29 +203,46 @@ pick a different one without signing out.
 
 ## Performance and token usage
 
-- **Parallel tool calls**: when a model requests several *read-only* tools in
-  one turn (`read_file`, `list_dir`, `search_files`, `git_status`, `git_diff`,
-  `git_log`, `get_pull_request_status` — no side effects, no ordering
-  dependency on each other), they run concurrently instead of one at a time.
-  Any call that writes, mutates git state, or isn't on that list keeps the
-  whole batch sequential, so nothing risky ever races. This cuts wall-clock
-  latency for investigation-heavy turns — it does not reduce token usage,
-  since the model still only sees one round of results either way.
+- **Parallel tool calls**: when a model requests several tools in one turn
+  that are safe to run together, they run concurrently instead of one at a
+  time — either all *read-only* (`read_file`, `list_dir`, `search_files`,
+  `git_status`, `git_diff`, `git_log`, `get_pull_request_status` — no side
+  effects, no ordering dependency on each other), or read-only calls plus
+  at most one *isolated-resource* call (`run_tests`, `browser_check` — no
+  confirmation gate, and each works against its own private resource — a
+  temp worktree, a fresh browser instance — that can't collide with a
+  read-only look at the live tree). Anything that writes, mutates git
+  state, or needs confirmation always keeps its whole batch sequential —
+  including two writes to different files: a confirmation is an
+  interactive gate, and the CLI's prompt can only have one question
+  pending at a time, so two at once would break rather than just be
+  awkward. This cuts wall-clock latency for investigation-heavy turns —
+  it does not reduce token usage, since the model still only sees one
+  round of results either way.
 - **Token usage** is dominated by the full conversation history being resent
-  on every turn, so the real levers are: (1) provider-side prompt caching on
-  that resent prefix — both DeepInfra and OpenRouter discount repeated
-  input tokens heavily (DeepInfra's cached-input pricing runs roughly
-  80-92% off standard input for the models checked at the time of writing),
-  and this project's history is append-only with a stable prefix, so it
-  should already benefit without any special handling; and (2) how much of
-  each tool's own output gets kept. `run_shell`/`run_tests` cap combined
-  stdout+stderr at 100KB by default, keeping the first ~20% and the *last*
-  ~80% of that budget rather than a single head-only cut — a command's
-  actually useful content (a test summary, "N failed", the final error) is
-  almost always at the end of its output, not the beginning.
+  on every turn, so the levers are:
+  1. **Automatic history compaction** — once the resent history's total
+     size crosses a threshold (150KB by default, roughly 37K tokens), older
+     large tool-call results and screenshots get replaced with a short
+     placeholder (never the system prompt, and never anything from the most
+     recent ~12 messages — recent context is what the model actually needs
+     right now). A tool-result message is always shrunk in place, never
+     removed outright, since every one has to stay paired with its
+     assistant message's tool call for the wire format to stay valid.
+  2. **Provider-side prompt caching** on that resent prefix — both
+     DeepInfra and OpenRouter discount repeated input tokens heavily
+     (DeepInfra's cached-input pricing ran roughly 80-92% off standard
+     input for the models checked at the time of writing), and this
+     project's history is append-only with a stable prefix, so it should
+     already benefit without any special handling.
+  3. **Output caps** — `run_shell`/`run_tests` cap combined stdout+stderr at
+     100KB by default, keeping the first ~20% and the *last* ~80% of that
+     budget rather than a single head-only cut, since a command's actually
+     useful content (a test summary, "N failed", the final error) is
+     almost always at the end of its output, not the beginning.
 - Use `/clear` (CLI) or starting a new session (PWA) to reset the
-  conversation once a long session's resent history stops being worth its
-  token cost.
+  conversation entirely once a long session's resent history stops being
+  worth its token cost even after compaction.
 
 ### MCP connectors (static API key/token)
 
