@@ -161,6 +161,36 @@ repos are still shared across tabs — only the active session is per-tab.
 Use **Settings (⚙) → Change Repository** to leave the current session and
 pick a different one without signing out.
 
+### Backing up conversations to Google Drive
+
+Tap the 💾 button in the topbar to save the current conversation to Google
+Drive — a Markdown note of what you asked, what the assistant did (a
+one-line summary per tool call, not full file contents/diffs — that's what
+git is for), and what it said, under `CodeJustWrite Backups/<repo name>/` in
+your Drive. Each tap creates a new timestamped file in that same per-repo
+folder, so starting a fresh conversation and saving again never overwrites
+an earlier backup.
+
+The button only appears once Google Drive is connected on the server — it's
+a one-time setup, not per-session:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or
+   pick) a project, enable the **Google Drive API**, then under **APIs &
+   Services → Credentials → Create Credentials → OAuth client ID** make a
+   **Web application** client. Add
+   `https://<your-deployed-domain>/api/google/callback` as an authorized
+   redirect URI.
+2. Set `CJW_GOOGLE_CLIENT_ID` and `CJW_GOOGLE_CLIENT_SECRET` from that
+   client on the server, and redeploy.
+3. Visit `https://<your-deployed-domain>/api/google/connect?token=<CJW_AUTH_TOKEN>`
+   once in a browser and approve access. The resulting page shows a refresh
+   token — set it as `CJW_GOOGLE_REFRESH_TOKEN` and redeploy; that page and
+   link aren't needed again afterward.
+
+The app only ever requests the `drive.file` scope (access to files it
+created itself, not your whole Drive), and the refresh token is the only
+long-lived secret involved — treat it like a password.
+
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique
