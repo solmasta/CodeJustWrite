@@ -60,6 +60,7 @@ export const browserCheckTool: ToolDefinition = {
     },
   },
   requiresConfirmation: false,
+  isolatedResource: true,
   async run(args, ctx) {
     const { chromium } = await import("playwright");
     const url = String(args.url);

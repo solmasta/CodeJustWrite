@@ -32,4 +32,10 @@ export interface ToolDefinition {
    *  (worktrees, the browser process, git refs) where a race could cause real damage; when in
    *  doubt, leave it false — the fallback is always safe, just serial. */
   readOnly?: boolean;
+  /** Doesn't require confirmation, and works against its own private resource (a temp git
+   *  worktree, a fresh browser instance) rather than the live working tree — safe to run
+   *  alongside readOnly calls from the same turn (at most one isolatedResource call per batch,
+   *  to avoid piling up e.g. two concurrent npm installs). Never combine with
+   *  requiresConfirmation: true — see the note on Agent.executeToolCalls for why. */
+  isolatedResource?: boolean;
 }

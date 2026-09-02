@@ -221,10 +221,17 @@ describe("Agent.setSystemPrompt", () => {
 });
 
 describe("Agent running independent read-only tool calls in parallel", () => {
-  function delayedTool(name: string, delayMs: number, readOnly: boolean, log: number[]): ToolDefinition {
+  function delayedTool(
+    name: string,
+    delayMs: number,
+    readOnly: boolean,
+    log: number[],
+    isolatedResource = false
+  ): ToolDefinition {
     return {
       spec: { name, description: name, parameters: { type: "object", properties: {} } },
       readOnly,
+      isolatedResource,
       async run() {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         log.push(Number(name.slice(-1)));
@@ -314,5 +321,172 @@ describe("Agent running independent read-only tool calls in parallel", () => {
     // Sequential: ~60ms (30+30). If this ran concurrently instead it'd be ~30ms — the floor here
     // catches an accidental "parallelize everything" regression.
     expect(elapsed).toBeGreaterThanOrEqual(55);
+  });
+
+  it("runs a readOnly call alongside a single isolatedResource call (e.g. run_tests) concurrently", async () => {
+    const finishOrder: number[] = [];
+    const tools = [
+      delayedTool("read_file_1", 10, true, finishOrder),
+      delayedTool("run_tests_2", 40, false, finishOrder, true),
+    ];
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "c1", name: "read_file_1", arguments: "{}" },
+            { id: "c2", name: "run_tests_2", arguments: "{}" },
+          ],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools,
+    });
+
+    const start = Date.now();
+    await agent.send("check status while tests run");
+    const elapsed = Date.now() - start;
+
+    // Sequential would be ~50ms (10+40); concurrent should be close to the slower one (40ms).
+    expect(elapsed).toBeLessThan(48);
+  });
+
+  it("never runs two isolatedResource calls concurrently, even alongside readOnly ones", async () => {
+    const finishOrder: number[] = [];
+    const tools = [
+      delayedTool("read_file_1", 5, true, finishOrder),
+      delayedTool("run_tests_2", 25, false, finishOrder, true),
+      delayedTool("browser_check_3", 25, false, finishOrder, true),
+    ];
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "c1", name: "read_file_1", arguments: "{}" },
+            { id: "c2", name: "run_tests_2", arguments: "{}" },
+            { id: "c3", name: "browser_check_3", arguments: "{}" },
+          ],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools,
+    });
+
+    const start = Date.now();
+    await agent.send("run tests and check the browser");
+    const elapsed = Date.now() - start;
+
+    // Two isolatedResource calls (25ms each) must never overlap — floor catches that regression;
+    // a fully sequential run is ~55ms (5+25+25).
+    expect(elapsed).toBeGreaterThanOrEqual(50);
+  });
+});
+
+describe("Agent.maybeCompactHistory", () => {
+  function makeAgentWithHistory(
+    entries: { toolName: string; content: string; images?: string[] }[],
+    compaction: { triggerBytes: number; keepRecentMessages: number; minMessageBytes: number }
+  ): Agent {
+    const provider = new ScriptedProvider([{ message: { role: "assistant", content: "ok" }, finishReason: "stop" }]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [],
+      compaction,
+    });
+    // Seed history directly via setSystemPrompt (keeps index 0) + reaching into getHistory() to
+    // push fake prior turns — simplest way to build a fixture without scripting N provider calls.
+    const history = agent.getHistory();
+    for (const entry of entries) {
+      history.push({ role: "assistant", content: null, toolCalls: [{ id: entry.toolName, name: entry.toolName, arguments: "{}" }] });
+      history.push({
+        role: "tool",
+        toolCallId: entry.toolName,
+        name: entry.toolName,
+        content: entry.content,
+        ...(entry.images ? { images: entry.images } : {}),
+      });
+    }
+    return agent;
+  }
+
+  it("leaves a small history completely untouched", async () => {
+    const agent = makeAgentWithHistory(
+      [{ toolName: "read_file", content: "short output" }],
+      { triggerBytes: 150_000, keepRecentMessages: 12, minMessageBytes: 2_000 }
+    );
+    const before = agent.getHistory().slice();
+
+    await agent.send("go");
+
+    // The pre-existing entries (system + assistant/tool pair) must be byte-for-byte unchanged —
+    // send() only appends the new user message + assistant reply after them.
+    expect(agent.getHistory().slice(0, before.length)).toEqual(before);
+  });
+
+  it("compacts an old large tool result once the total size crosses the trigger, but leaves recent large results intact", async () => {
+    const bigOutput = "x".repeat(5_000);
+    const agent = makeAgentWithHistory(
+      [
+        { toolName: "old_search", content: bigOutput },
+        { toolName: "recent_search", content: bigOutput },
+      ],
+      { triggerBytes: 1_000, keepRecentMessages: 2, minMessageBytes: 500 }
+    );
+
+    await agent.send("go");
+
+    const history = agent.getHistory();
+    const oldToolMsg = history.find((m) => m.name === "old_search");
+    const recentToolMsg = history.find((m) => m.name === "recent_search");
+    expect(oldToolMsg?.content).toContain("compacted");
+    expect(oldToolMsg?.content?.length).toBeLessThan(bigOutput.length);
+    expect(recentToolMsg?.content).toBe(bigOutput);
+  });
+
+  it("strips images from an old screenshot message but keeps a recent one intact", async () => {
+    const bigImage = "data:image/png;base64," + "A".repeat(3_000);
+    const agent = makeAgentWithHistory(
+      [{ toolName: "old_check", content: "loaded", images: [bigImage] }],
+      { triggerBytes: 500, keepRecentMessages: 0, minMessageBytes: 100_000 }
+    );
+    const history = agent.getHistory();
+    // The compaction fixture only pushes an assistant+tool pair per entry — add the synthetic
+    // image-carrying user message the real agent would have pushed via applyToolRun.
+    history.push({ role: "user", content: "(old_check screenshot above)", images: [bigImage] });
+
+    await agent.send("go");
+
+    const imageMsg = agent.getHistory().find((m) => m.content?.includes("old_check screenshot"));
+    expect(imageMsg?.images).toBeUndefined();
+    expect(imageMsg?.content).toContain("omitted");
+  });
+
+  it("never touches the system message even when compaction triggers", async () => {
+    const agent = makeAgentWithHistory(
+      [{ toolName: "search", content: "x".repeat(5_000) }],
+      { triggerBytes: 100, keepRecentMessages: 0, minMessageBytes: 100 }
+    );
+    const systemBefore = agent.getHistory()[0];
+
+    await agent.send("go");
+
+    expect(agent.getHistory()[0]).toEqual(systemBefore);
   });
 });

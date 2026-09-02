@@ -7,6 +7,29 @@ import { SYSTEM_PROMPT } from "./systemPrompt.js";
 
 const MAX_TOOL_ITERATIONS = 25;
 
+export interface CompactionConfig {
+  /** Once the history's total resent size (content + image bytes) exceeds this, older large
+   *  entries get compacted. Roughly 4 bytes/token, so the default leaves plenty of headroom on
+   *  typical context windows even after a long session. */
+  triggerBytes?: number;
+  /** This many of the most recent messages are always left fully intact, however large — recent
+   *  context is what the model actually needs right now. */
+  keepRecentMessages?: number;
+  /** A tool-result message's content below this size is left alone even during compaction — only
+   *  the biggest, most token-expensive entries are worth shrinking. */
+  minMessageBytes?: number;
+}
+
+const DEFAULT_COMPACTION: Required<CompactionConfig> = {
+  triggerBytes: 150_000,
+  keepRecentMessages: 12,
+  minMessageBytes: 2_000,
+};
+
+function messageBytes(m: ChatMessage): number {
+  return (m.content?.length ?? 0) + (m.images?.reduce((sum, img) => sum + img.length, 0) ?? 0);
+}
+
 export interface AgentDeps {
   getProvider: () => LLMProvider;
   getModel: () => string;
@@ -17,6 +40,9 @@ export interface AgentDeps {
   /** Defaults to the base SYSTEM_PROMPT. Pass buildSystemPrompt(presetId, customInstructions)
    *  to start with a prompt mode/custom instructions already applied. */
   systemPrompt?: string;
+  /** Tuning for automatic history compaction (see maybeCompactHistory). Defaults are sane for
+   *  real usage; pass overrides mainly to keep test fixtures small. */
+  compaction?: CompactionConfig;
   onTextDelta?: (delta: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string, error: boolean) => void;
@@ -28,6 +54,7 @@ export class Agent {
   private readonly tools: ToolDefinition[];
   private readonly toolsByName: Map<string, ToolDefinition>;
   private readonly toolNames: Set<string>;
+  private readonly compaction: Required<CompactionConfig>;
 
   constructor(private deps: AgentDeps) {
     this.systemPrompt = deps.systemPrompt ?? SYSTEM_PROMPT;
@@ -35,6 +62,7 @@ export class Agent {
     this.tools = deps.tools ?? allTools;
     this.toolsByName = new Map(this.tools.map((t) => [t.spec.name, t]));
     this.toolNames = new Set(this.toolsByName.keys());
+    this.compaction = { ...DEFAULT_COMPACTION, ...deps.compaction };
   }
 
   getHistory(): ChatMessage[] {
@@ -57,8 +85,40 @@ export class Agent {
     this.history = [{ role: "system", content: this.systemPrompt }];
   }
 
+  /** Once the resent history grows past a byte threshold, replaces old large tool-result content
+   *  and old screenshot images with short placeholders — never touching the system message or
+   *  the most recent messages (see CompactionConfig). A tool-role message is never removed
+   *  outright, only its content shrunk: every one has to stay paired with its assistant
+   *  message's tool_call_id for the wire format to stay valid. Runs once per send() rather than
+   *  continuously, since it's cheap relative to an actual LLM call. */
+  private maybeCompactHistory(): void {
+    const { triggerBytes, keepRecentMessages, minMessageBytes } = this.compaction;
+    const totalBytes = this.history.reduce((sum, m) => sum + messageBytes(m), 0);
+    if (totalBytes <= triggerBytes) return;
+
+    const keepFromIndex = Math.max(1, this.history.length - keepRecentMessages);
+    for (let i = 1; i < keepFromIndex; i++) {
+      const msg = this.history[i];
+      if (msg.role === "tool" && (msg.content?.length ?? 0) > minMessageBytes) {
+        this.history[i] = {
+          ...msg,
+          content: `[compacted — ${msg.content!.length} bytes of older ${msg.name ?? "tool"} output omitted to save context; re-run the tool if you need it again]`,
+        };
+      } else if (msg.images?.length) {
+        this.history[i] = {
+          ...msg,
+          content: msg.content
+            ? `${msg.content} (older screenshot omitted to save context)`
+            : "(older screenshot omitted to save context)",
+          images: undefined,
+        };
+      }
+    }
+  }
+
   async send(userMessage: string): Promise<string> {
     this.history.push({ role: "user", content: userMessage });
+    this.maybeCompactHistory();
 
     let finalText = "";
 
@@ -95,18 +155,26 @@ export class Agent {
     return finalText;
   }
 
-  /** Runs every tool call from one model turn. When the whole batch is readOnly tools (no side
-   *  effects, no ordering dependency on each other — see ToolDefinition.readOnly), they run
-   *  concurrently to cut wall-clock latency for multi-call investigation bursts (e.g. three
-   *  read_file calls at once) — this doesn't reduce token usage, only how long the user waits for
-   *  it, since the model still only sees one round of results either way. Results are still
-   *  applied — onToolResult fired, history pushed — in the original request order regardless of
-   *  which call actually finishes first, so callback/history ordering stays identical to the
-   *  serial path and the client's tool-card correlation needs no changes. Anything else (a write,
-   *  a mix, a single call) runs sequentially as before — never risk two mutating calls racing. */
+  /** Runs every tool call from one model turn. A batch runs concurrently when every call is
+   *  either readOnly (no side effects, no ordering dependency — see ToolDefinition.readOnly) or
+   *  isolatedResource (no confirmation gate, and works against its own private resource — a temp
+   *  worktree, a fresh browser instance — that can't collide with a readOnly read of the live
+   *  tree), with at most one isolatedResource call per batch to avoid piling up e.g. two
+   *  concurrent npm installs. This cuts wall-clock latency for multi-call bursts (e.g. read_file
+   *  x3, or a read alongside run_tests) — it doesn't reduce token usage, since the model still
+   *  only sees one round of results either way. Results are still applied — onToolResult fired,
+   *  history pushed — in the original request order regardless of which call actually finishes
+   *  first, so callback/history ordering stays identical to the serial path and the client's
+   *  tool-card correlation needs no changes.
+   *
+   *  Deliberately NOT extended to confirmation-requiring tools (write_file, edit_file,
+   *  delete_file, any git mutation, etc.), even ones that touch clearly distinct resources (two
+   *  write_file calls to different paths, say): a confirmation is an interactive gate, and the
+   *  CLI's readline-based prompt can only have one question pending at a time — two concurrent
+   *  confirmation prompts there is not just a UX wrinkle, it breaks outright. Any batch with such
+   *  a call, or a mix of anything else, runs sequentially — never risk two mutating calls racing. */
   private async executeToolCalls(calls: { id: string; name: string; arguments?: string }[]): Promise<void> {
-    const allReadOnly = calls.length > 1 && calls.every((c) => this.toolsByName.get(c.name)?.readOnly);
-    if (!allReadOnly) {
+    if (!this.canRunConcurrently(calls)) {
       for (const call of calls) {
         this.applyToolRun(call, await this.runTool(call));
       }
@@ -116,6 +184,23 @@ export class Agent {
     for (let i = 0; i < calls.length; i++) {
       this.applyToolRun(calls[i], await runs[i]);
     }
+  }
+
+  private canRunConcurrently(calls: { name: string }[]): boolean {
+    if (calls.length <= 1) return false;
+    let isolatedCount = 0;
+    for (const call of calls) {
+      const tool = this.toolsByName.get(call.name);
+      if (!tool) return false;
+      if (tool.readOnly) continue;
+      if (tool.isolatedResource) {
+        isolatedCount++;
+        if (isolatedCount > 1) return false;
+        continue;
+      }
+      return false;
+    }
+    return true;
   }
 
   private async runTool(
