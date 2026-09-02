@@ -207,6 +207,7 @@ export const getPullRequestStatusTool: ToolDefinition = {
     },
   },
   requiresConfirmation: false,
+  readOnly: true,
   async run(args, ctx) {
     const ref =
       args.pullNumber != null

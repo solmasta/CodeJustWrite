@@ -5,10 +5,13 @@ import {
   Agent,
   ProviderRegistry,
   allTools,
+  buildSystemPrompt,
   connectMcpServers,
   defaultModelFor,
   execSandboxed,
   log,
+  DEFAULT_PROMPT_PRESET_ID,
+  PROMPT_PRESETS,
   type CjwConfig,
   type ProviderName,
   type ToolContext,
@@ -20,6 +23,8 @@ Slash commands:
   /provider <name>     Switch LLM provider: deepinfra | openrouter
   /models [filter]     List models available from the current provider (live), e.g. /models claude
   /model <name>        Switch model for the current provider
+  /mode [preset]        Show or switch prompt style (default | tdd | explain | terse | security)
+  /instructions [text]  Set (or, with no text, clear) custom instructions added to every reply
   /mcp                  Show connected MCP servers and their tools
   /diff                Show git diff of the working tree
   /status              Show git status
@@ -45,7 +50,12 @@ export async function runRepl(config: CjwConfig): Promise<void> {
   const repoRoot = await assertGitRepo(rl);
   const registry = new ProviderRegistry(config);
 
-  const state = { provider: config.provider as ProviderName, model: config.model };
+  const state = {
+    provider: config.provider as ProviderName,
+    model: config.model,
+    promptPreset: DEFAULT_PROMPT_PRESET_ID,
+    customInstructions: "",
+  };
 
   const ctx: ToolContext = {
     repoRoot,
@@ -71,6 +81,7 @@ export async function runRepl(config: CjwConfig): Promise<void> {
     getModel: () => state.model,
     ctx,
     tools: [...allTools, ...mcp.tools],
+    systemPrompt: buildSystemPrompt(state.promptPreset, state.customInstructions),
     onTextDelta: (delta) => log.assistant(delta),
     onToolCall: (name, args) => log.tool(`\n→ ${name}(${JSON.stringify(args)})`),
     onToolResult: (name, result, isError) => {
@@ -147,6 +158,25 @@ export async function runRepl(config: CjwConfig): Promise<void> {
           state.model = arg;
           log.success(`Model set to ${state.model}`);
         }
+      } else if (cmd === "mode") {
+        if (!arg) {
+          log.info(
+            `Current: ${state.promptPreset}\n` +
+              PROMPT_PRESETS.map((p) => `  ${p.id}${p.id === state.promptPreset ? " (current)" : ""} — ${p.description}`).join(
+                "\n"
+              )
+          );
+        } else if (!PROMPT_PRESETS.some((p) => p.id === arg)) {
+          log.error(`Unknown mode "${arg}". Run /mode with no argument to see the list.`);
+        } else {
+          state.promptPreset = arg;
+          agent.setSystemPrompt(buildSystemPrompt(state.promptPreset, state.customInstructions));
+          log.success(`Prompt style set to ${state.promptPreset}`);
+        }
+      } else if (cmd === "instructions") {
+        state.customInstructions = arg;
+        agent.setSystemPrompt(buildSystemPrompt(state.promptPreset, state.customInstructions));
+        log.success(arg ? `Custom instructions set.` : "Custom instructions cleared.");
       } else if (cmd === "diff") {
         const result = await execSandboxed("git diff HEAD", { cwd: repoRoot, timeoutSec: 15 });
         log.diff(result.stdout || "(no changes)");

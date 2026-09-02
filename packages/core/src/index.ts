@@ -1,6 +1,7 @@
 export { Agent } from "./agent/agent.js";
 export type { AgentDeps } from "./agent/agent.js";
-export { SYSTEM_PROMPT } from "./agent/systemPrompt.js";
+export { SYSTEM_PROMPT, PROMPT_PRESETS, DEFAULT_PROMPT_PRESET_ID, buildSystemPrompt } from "./agent/systemPrompt.js";
+export type { PromptPreset } from "./agent/systemPrompt.js";
 export { allTools, toolsByName } from "./agent/tools/index.js";
 export type { ToolDefinition, ToolContext } from "./agent/tools/index.js";
 

@@ -6,10 +6,13 @@ import {
   Agent,
   ProviderRegistry,
   allTools,
+  buildSystemPrompt,
   connectMcpServers,
   defaultModelFor,
   execSandboxed,
   log,
+  DEFAULT_PROMPT_PRESET_ID,
+  PROMPT_PRESETS,
   type CjwConfig,
   type ModelInfo,
   type ProviderName,
@@ -29,6 +32,8 @@ export class Session {
   autoApprove = false;
   provider: ProviderName;
   model: string;
+  promptPreset: string = DEFAULT_PROMPT_PRESET_ID;
+  customInstructions = "";
   ws: WebSocket | null = null;
 
   private agent: Agent;
@@ -59,6 +64,7 @@ export class Session {
       getModel: () => this.model,
       ctx,
       tools: [...allTools, ...mcpTools],
+      systemPrompt: buildSystemPrompt(this.promptPreset, this.customInstructions),
       onTextDelta: (delta) => this.send({ type: "assistant_delta", text: delta }),
       onToolCall: (name, args) => this.send({ type: "tool_call", name, args }),
       onToolResult: (name, result, error) => this.send({ type: "tool_result", name, result, error }),
@@ -77,6 +83,9 @@ export class Session {
       model: this.model,
       autoApprove: this.autoApprove,
       repoRoot: this.repoRoot,
+      promptPreset: this.promptPreset,
+      customInstructions: this.customInstructions,
+      promptPresets: PROMPT_PRESETS,
     });
   }
 
@@ -103,6 +112,14 @@ export class Session {
    *  settings UI needs to list models for whichever provider is currently selected there). */
   async listModels(provider: ProviderName): Promise<ModelInfo[]> {
     return this.registry.get(provider).listModels();
+  }
+
+  /** Switches prompt mode/custom instructions in place — the agent picks it up on its next
+   *  reply without losing the conversation so far (unlike starting a fresh session). */
+  setPromptMode(promptPreset: string, customInstructions: string): void {
+    this.promptPreset = promptPreset;
+    this.customInstructions = customInstructions;
+    this.agent.setSystemPrompt(buildSystemPrompt(promptPreset, customInstructions));
   }
 
   setAutoApprove(value: boolean): void {

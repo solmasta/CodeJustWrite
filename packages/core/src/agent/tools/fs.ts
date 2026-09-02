@@ -76,6 +76,7 @@ export const readFileTool: ToolDefinition = {
       required: ["path"],
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const relPath = String(args.path);
     validateFilename(relPath);
@@ -94,6 +95,7 @@ export const listDirTool: ToolDefinition = {
       required: ["path"],
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const relPath = String(args.path);
     validateFilename(relPath);
@@ -206,6 +208,7 @@ export const searchFilesTool: ToolDefinition = {
     },
   },
   requiresConfirmation: false,
+  readOnly: true,
   async run(args, ctx) {
     const pattern = String(args.pattern ?? "");
     if (!pattern) throw new Error("pattern is required");

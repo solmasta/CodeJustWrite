@@ -676,6 +676,23 @@ body {
   word-break: break-all;
 }
 
+.drawer textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.drawer textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

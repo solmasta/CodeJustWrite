@@ -6,14 +6,20 @@ import type { ToolContext, ToolDefinition } from "../src/agent/tools/types.js";
 class ScriptedProvider implements LLMProvider {
   readonly name = "scripted";
   calls = 0;
+  receivedMessages: ChatMessage[][] = [];
   constructor(private readonly responses: CompletionResult[]) {}
 
   async complete(
-    _messages: ChatMessage[],
+    messages: ChatMessage[],
     _tools: ToolSpec[],
     _model: string,
     _handlers?: StreamHandlers
   ): Promise<CompletionResult> {
+    // Snapshot the array shape at call time — `messages` is the Agent's own history array
+    // passed by reference, and setSystemPrompt() replaces (not mutates) history[0], so a
+    // shallow copy here is enough to keep each call's system message from appearing to
+    // retroactively change once a later setSystemPrompt() call replaces that slot.
+    this.receivedMessages.push([...messages]);
     const response = this.responses[this.calls];
     this.calls++;
     if (!response) throw new Error("ScriptedProvider ran out of scripted responses");
@@ -169,5 +175,144 @@ describe("Agent showing a tool's image result to the model", () => {
     const history = agent.getHistory();
     const toolIndex = history.findIndex((m) => m.role === "tool");
     expect(history[toolIndex + 1]?.role).not.toBe("user");
+  });
+});
+
+describe("Agent.setSystemPrompt", () => {
+  it("takes effect on the next send() without discarding the conversation so far", async () => {
+    const provider = new ScriptedProvider([
+      { message: { role: "assistant", content: "First reply." }, finishReason: "stop" },
+      { message: { role: "assistant", content: "Second reply." }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [],
+      systemPrompt: "Initial prompt.",
+    });
+
+    await agent.send("hello");
+    agent.setSystemPrompt("Updated prompt.");
+    await agent.send("still here?");
+
+    expect(provider.receivedMessages[0][0]).toEqual({ role: "system", content: "Initial prompt." });
+    expect(provider.receivedMessages[1][0]).toEqual({ role: "system", content: "Updated prompt." });
+    // The user/assistant turns from before the switch are still in history, not wiped out.
+    expect(provider.receivedMessages[1].some((m) => m.role === "user" && m.content === "hello")).toBe(true);
+    expect(provider.receivedMessages[1].some((m) => m.content === "First reply.")).toBe(true);
+  });
+
+  it("reset() keeps whichever system prompt is currently set, not the original default", async () => {
+    const provider = new ScriptedProvider([{ message: { role: "assistant", content: "ok" }, finishReason: "stop" }]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [],
+      systemPrompt: "Initial prompt.",
+    });
+
+    agent.setSystemPrompt("Updated prompt.");
+    agent.reset();
+
+    expect(agent.getHistory()).toEqual([{ role: "system", content: "Updated prompt." }]);
+  });
+});
+
+describe("Agent running independent read-only tool calls in parallel", () => {
+  function delayedTool(name: string, delayMs: number, readOnly: boolean, log: number[]): ToolDefinition {
+    return {
+      spec: { name, description: name, parameters: { type: "object", properties: {} } },
+      readOnly,
+      async run() {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        log.push(Number(name.slice(-1)));
+        return `${name} done`;
+      },
+    };
+  }
+
+  it("runs a same-turn batch of readOnly calls concurrently, cutting total wall-clock time", async () => {
+    const finishOrder: number[] = [];
+    const tools = [
+      delayedTool("read_file_1", 60, true, finishOrder),
+      delayedTool("read_file_2", 10, true, finishOrder),
+      delayedTool("read_file_3", 30, true, finishOrder),
+    ];
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "c1", name: "read_file_1", arguments: "{}" },
+            { id: "c2", name: "read_file_2", arguments: "{}" },
+            { id: "c3", name: "read_file_3", arguments: "{}" },
+          ],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" },
+    ]);
+    const resultEvents: string[] = [];
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools,
+      onToolResult: (name) => resultEvents.push(name),
+    });
+
+    const start = Date.now();
+    await agent.send("investigate");
+    const elapsed = Date.now() - start;
+
+    // Sequential would take ~100ms (60+10+30); concurrent should be close to the slowest one
+    // (60ms). A generous ceiling well under the sequential sum proves they actually overlapped.
+    expect(elapsed).toBeLessThan(90);
+    // The fastest tool (read_file_2, 10ms) actually finishes first under the hood...
+    expect(finishOrder[0]).toBe(2);
+    // ...but callbacks/history are still reported in the original request order (1, 2, 3), not
+    // completion order, so the client's tool-card correlation never has to change.
+    expect(resultEvents).toEqual(["read_file_1", "read_file_2", "read_file_3"]);
+    const toolMessages = agent.getHistory().filter((m) => m.role === "tool");
+    expect(toolMessages.map((m) => m.name)).toEqual(["read_file_1", "read_file_2", "read_file_3"]);
+  });
+
+  it("keeps a batch with any non-readOnly call fully sequential", async () => {
+    const finishOrder: number[] = [];
+    const tools = [
+      delayedTool("read_file_1", 30, true, finishOrder),
+      delayedTool("write_file_1", 30, false, finishOrder),
+    ];
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "c1", name: "read_file_1", arguments: "{}" },
+            { id: "c2", name: "write_file_1", arguments: "{}" },
+          ],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools,
+    });
+
+    const start = Date.now();
+    await agent.send("do stuff");
+    const elapsed = Date.now() - start;
+
+    // Sequential: ~60ms (30+30). If this ran concurrently instead it'd be ~30ms — the floor here
+    // catches an accidental "parallelize everything" regression.
+    expect(elapsed).toBeGreaterThanOrEqual(55);
   });
 });

@@ -1,5 +1,5 @@
 import "./style.css";
-import type { ServerMessage, Settings } from "./types.js";
+import type { ServerMessage, Settings, PromptPreset } from "./types.js";
 import { loadSettings, persistSettings, loadActiveSession, saveActiveSession, clearActiveSession } from "./settings.js";
 import { createConnection } from "./connection.js";
 import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
@@ -32,6 +32,9 @@ const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
 const modelSelect = el<HTMLSelectElement>("#modelSelect");
 const modelHint = el<HTMLParagraphElement>("#modelHint");
+const promptPresetSelect = el<HTMLSelectElement>("#promptPreset");
+const promptPresetHint = el<HTMLParagraphElement>("#promptPresetHint");
+const customInstructionsInput = el<HTMLTextAreaElement>("#customInstructions");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
@@ -50,6 +53,7 @@ let lastToolCard: HTMLDivElement | null = null;
 let lastToolName = "";
 let settings: Settings = loadSettings();
 let isProcessing = false;
+let promptPresets: PromptPreset[] = [];
 
 // --- Sign In ---
 async function handleSignIn(): Promise<void> {
@@ -245,6 +249,15 @@ function handleServerMessage(msg: ServerMessage): void {
         settings.provider = msg.provider as Settings["provider"];
         settings.model = msg.model ?? settings.model;
         persistSettings({ provider: settings.provider, model: settings.model });
+      }
+      if (msg.promptPresets?.length) {
+        promptPresets = msg.promptPresets;
+        populatePromptPresetSelect();
+      }
+      if (msg.promptPreset) {
+        settings.promptPreset = msg.promptPreset;
+        settings.customInstructions = msg.customInstructions ?? settings.customInstructions;
+        persistSettings({ promptPreset: settings.promptPreset, customInstructions: settings.customInstructions });
       }
       break;
     }
@@ -465,8 +478,34 @@ let modelsRequestedFor: string | null = null;
 function openSettings(): void {
   providerSelect.value = settings.provider || "deepinfra";
   autoApproveCheck.checked = settings.autoApprove ?? false;
+  populatePromptPresetSelect();
+  customInstructionsInput.value = settings.customInstructions || "";
   settingsModal.showModal();
   refreshModels();
+}
+
+/** Populates the "Prompt style" dropdown from whichever preset list the server sent in its
+ *  "state" message (core's PROMPT_PRESETS, so this stays in sync without hardcoding a copy
+ *  here) — falls back to just "Default" if that hasn't arrived yet. */
+function populatePromptPresetSelect(): void {
+  const current = settings.promptPreset || "default";
+  const options = promptPresets.length
+    ? promptPresets
+    : [{ id: "default", label: "Default", description: "", instructions: "" }];
+  promptPresetSelect.innerHTML = "";
+  for (const preset of options) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = preset.label;
+    if (preset.id === current) option.selected = true;
+    promptPresetSelect.appendChild(option);
+  }
+  updatePromptPresetHint();
+}
+
+function updatePromptPresetHint(): void {
+  const preset = promptPresets.find((p) => p.id === promptPresetSelect.value);
+  text(promptPresetHint, preset?.description ?? "");
 }
 
 function closeSettings(): void {
@@ -495,14 +534,17 @@ function saveSettings(): void {
   const provider = providerSelect.value as Settings["provider"];
   const model = modelSelect.value || settings.model;
   const autoApprove = autoApproveCheck.checked;
+  const promptPreset = promptPresetSelect.value || settings.promptPreset;
+  const customInstructions = customInstructionsInput.value;
 
-  persistSettings({ provider, model, autoApprove });
+  persistSettings({ provider, model, autoApprove, promptPreset, customInstructions });
   settings = loadSettings();
 
   if (connection) {
     if (provider !== previousProvider) connection.send({ type: "set_provider", provider });
     connection.send({ type: "set_model", model });
     connection.send({ type: "set_auto_approve", value: autoApprove });
+    connection.send({ type: "set_prompt_mode", promptPreset, customInstructions });
   }
   settingsModal.close();
 }
@@ -554,6 +596,7 @@ function init(): void {
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
+  promptPresetSelect.addEventListener("change", updatePromptPresetHint);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });

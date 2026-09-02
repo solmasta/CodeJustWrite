@@ -52,6 +52,8 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model moonshotai
 /provider <name>     Switch LLM provider: deepinfra | openrouter
 /models [filter]     List models available from the current provider (live), e.g. /models claude
 /model <name>         Switch model for the current provider
+/mode [preset]         Show or switch prompt style: default | tdd | explain | terse | security
+/instructions [text]   Set (or, with no text, clear) custom instructions added to every reply
 /mcp                  Show connected MCP servers and their tools
 /diff                 Show git diff of the working tree
 /status               Show git status
@@ -75,6 +77,27 @@ Claude models under `anthropic/...` IDs alongside its other models — run
 see exactly which ones your OpenRouter account currently has access to, and
 `/model <id>` to switch to one. Pricing and availability are set by
 OpenRouter, not by this project.
+
+### Prompt style and custom instructions
+
+Beyond provider/model, you can switch how the agent *behaves* on the fly —
+no restart needed, and it takes effect on the next reply without losing the
+conversation so far:
+
+- **Prompt style** — a small set of presets layered on top of the base
+  system prompt (never replacing it, so the core safety rules like "don't
+  push/merge without being asked" always still apply): `default`,
+  `tdd` (write a failing test first), `explain` (narrate reasoning as it
+  works), `terse` (minimal prose), `security` (extra scrutiny for
+  injection/auth/secrets in every change).
+- **Custom instructions** — free-text guidance of your own, appended after
+  whichever preset is active (e.g. "always use tabs", "prefer functional
+  components").
+
+CLI: `/mode` (no argument) lists the presets and shows the current one,
+`/mode tdd` switches; `/instructions <text>` sets custom instructions,
+`/instructions` with nothing clears them. PWA: both live in **Settings (⚙)**
+as a "Prompt style" dropdown and a "Custom instructions" text box.
 
 ## Quick start: phone PWA
 
@@ -177,6 +200,32 @@ pick a different one without signing out.
     caught, not just confirmed to have loaded. The Docker image installs
     Chromium at build time (`playwright install --with-deps chromium`); a
     non-Docker deploy needs to run that manually.
+
+## Performance and token usage
+
+- **Parallel tool calls**: when a model requests several *read-only* tools in
+  one turn (`read_file`, `list_dir`, `search_files`, `git_status`, `git_diff`,
+  `git_log`, `get_pull_request_status` — no side effects, no ordering
+  dependency on each other), they run concurrently instead of one at a time.
+  Any call that writes, mutates git state, or isn't on that list keeps the
+  whole batch sequential, so nothing risky ever races. This cuts wall-clock
+  latency for investigation-heavy turns — it does not reduce token usage,
+  since the model still only sees one round of results either way.
+- **Token usage** is dominated by the full conversation history being resent
+  on every turn, so the real levers are: (1) provider-side prompt caching on
+  that resent prefix — both DeepInfra and OpenRouter discount repeated
+  input tokens heavily (DeepInfra's cached-input pricing runs roughly
+  80-92% off standard input for the models checked at the time of writing),
+  and this project's history is append-only with a stable prefix, so it
+  should already benefit without any special handling; and (2) how much of
+  each tool's own output gets kept. `run_shell`/`run_tests` cap combined
+  stdout+stderr at 100KB by default, keeping the first ~20% and the *last*
+  ~80% of that budget rather than a single head-only cut — a command's
+  actually useful content (a test summary, "N failed", the final error) is
+  almost always at the end of its output, not the beginning.
+- Use `/clear` (CLI) or starting a new session (PWA) to reset the
+  conversation once a long session's resent history stops being worth its
+  token cost.
 
 ### MCP connectors (static API key/token)
 

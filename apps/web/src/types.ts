@@ -4,6 +4,13 @@ export interface RepoInfo {
   default_branch?: string;
 }
 
+export interface PromptPreset {
+  id: string;
+  label: string;
+  description: string;
+  instructions: string;
+}
+
 export interface Settings {
   serverUrl: string;
   token: string;
@@ -13,6 +20,8 @@ export interface Settings {
   model: string;
   autoApprove: boolean;
   recentRepos: RepoInfo[];
+  promptPreset: string;
+  customInstructions: string;
 }
 
 /**
@@ -50,6 +59,9 @@ export interface ServerMessage {
   autoApprove?: boolean;
   repoRoot?: string;
   models?: { id: string }[];
+  promptPreset?: string;
+  customInstructions?: string;
+  promptPresets?: PromptPreset[];
 }
 
 export interface ChatMessage {

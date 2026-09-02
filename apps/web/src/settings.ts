@@ -12,6 +12,8 @@ const defaults: Settings = {
   model: "moonshotai/Kimi-K3",
   autoApprove: false,
   recentRepos: [],
+  promptPreset: "default",
+  customInstructions: "",
 };
 
 export function loadSettings(): Settings {

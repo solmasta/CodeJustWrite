@@ -215,6 +215,12 @@ httpServer.on("upgrade", (req, socket, head) => {
         case "set_model":
           session.setModel(String(msg.model ?? session.model));
           break;
+        case "set_prompt_mode":
+          session.setPromptMode(
+            String(msg.promptPreset ?? session.promptPreset),
+            String(msg.customInstructions ?? session.customInstructions)
+          );
+          break;
         case "list_models": {
           const provider = msg.provider === "openrouter" ? "openrouter" : "deepinfra";
           session
