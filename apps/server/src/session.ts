@@ -66,8 +66,8 @@ export class Session {
       tools: [...allTools, ...mcpTools],
       systemPrompt: buildSystemPrompt(this.promptPreset, this.customInstructions),
       onTextDelta: (delta) => this.send({ type: "assistant_delta", text: delta }),
-      onToolCall: (name, args) => this.send({ type: "tool_call", name, args }),
-      onToolResult: (name, result, error) => this.send({ type: "tool_result", name, result, error }),
+      onToolCall: (name, args, callId) => this.send({ type: "tool_call", name, args, callId }),
+      onToolResult: (name, result, error, callId) => this.send({ type: "tool_result", name, result, error, callId }),
     });
   }
 
