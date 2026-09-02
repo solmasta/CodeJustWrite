@@ -58,7 +58,8 @@ export interface ServerMessage {
     | "error"
     | "state"
     | "models"
-    | "history";
+    | "history"
+    | "pong";
   text?: string;
   name?: string;
   args?: unknown;

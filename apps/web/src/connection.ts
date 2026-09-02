@@ -6,6 +6,13 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "re
 export interface ConnectionManager {
   send: (data: unknown) => void;
   close: () => void;
+  /** Tears down whatever connection currently exists — regardless of what its readyState
+   *  claims — and immediately opens a fresh one with backoff reset to zero. A backgrounded
+   *  mobile tab's socket can die silently without ever firing a close event, so readyState can
+   *  keep reporting OPEN long after the connection is actually dead; the normal reconnect path
+   *  (triggered by onclose) never fires in that case; a caller who has independently confirmed
+   *  the connection is unresponsive (see the app's checkConnectionAlive) needs this instead. */
+  reconnectNow: () => void;
   onMessage: (handler: (msg: unknown) => void) => void;
   onOpen: (handler: () => void) => void;
   onClose: (handler: () => void) => void;
@@ -102,6 +109,24 @@ export function createConnection(
       }
       socket?.close();
       socket = null;
+    },
+    reconnectNow: () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (socket) {
+        // Detach the stale socket's own handlers first — otherwise its close event (whenever it
+        // eventually fires) would schedule a second, redundant backoff reconnect racing this one.
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.close();
+        socket = null;
+      }
+      reconnectAttempts = 0;
+      connect();
     },
     onMessage: (handler) => { messageHandler = handler; },
     onOpen: (handler) => { openHandler = handler; },

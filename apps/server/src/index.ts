@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import express from "express";
 import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
 import { loadConfig } from "@codejustwrite/core";
 import { loadServerConfig } from "./config.js";
 import { requireAuth, checkWsToken } from "./auth.js";
@@ -157,6 +158,28 @@ app.get(/^(?!\/api).*/, (_req, res) => {
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
+// A backgrounded mobile tab (or a dropped cellular connection) can kill the underlying TCP
+// connection without ever sending a clean close frame — the socket just goes silently dead,
+// with WebSocketServer none the wiser and the client's own readyState still reporting "OPEN"
+// indefinitely. Ping every connection on an interval and terminate any that didn't answer the
+// previous round, so a dead session gets dropped (freeing session.ws, and firing the client's
+// close handler if the connection can still deliver one) instead of sitting there as a phantom
+// "connected" session forever. The client runs its own faster, foreground-triggered version of
+// this same check (see apps/web/src/main.ts's checkConnectionAlive) for a snappier recovery the
+// moment the app is reopened, rather than waiting out this interval.
+const alive = new WeakSet<WebSocket>();
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!alive.has(ws)) {
+      ws.terminate();
+      continue;
+    }
+    alive.delete(ws);
+    ws.ping();
+  }
+}, 30_000);
+heartbeat.unref();
+
 httpServer.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "", "http://localhost");
   if (url.pathname !== "/ws") {
@@ -181,6 +204,8 @@ httpServer.on("upgrade", (req, socket, head) => {
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     session.attach(ws);
+    alive.add(ws);
+    ws.on("pong", () => alive.add(ws));
 
     ws.on("message", (raw) => {
       let msg: Record<string, unknown>;
@@ -193,6 +218,13 @@ httpServer.on("upgrade", (req, socket, head) => {
       session.touch();
 
       switch (msg.type) {
+        // App-level liveness probe a client sends the moment it comes back to the foreground —
+        // a plain protocol-level pong isn't reachable from browser JS, so this round trip is
+        // what lets the client itself detect a connection that's gone silently dead. See
+        // apps/web/src/main.ts's checkConnectionAlive.
+        case "ping":
+          ws.send(JSON.stringify({ type: "pong" }));
+          break;
         case "user_message":
           void session.handleUserMessage(String(msg.text ?? ""));
           break;
