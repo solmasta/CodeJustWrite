@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
+import { execSandboxed } from "../../sandbox/exec.js";
 import type { ToolDefinition } from "./types.js";
+
+// Cap on search_files output so a broad pattern can't flood the context.
+const MAX_SEARCH_RESULTS = 200;
 
 // Maximum file size: 1MB
 const MAX_FILE_SIZE = 1024 * 1024;
@@ -72,6 +76,7 @@ export const readFileTool: ToolDefinition = {
       required: ["path"],
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const relPath = String(args.path);
     validateFilename(relPath);
@@ -90,6 +95,7 @@ export const listDirTool: ToolDefinition = {
       required: ["path"],
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const relPath = String(args.path);
     validateFilename(relPath);
@@ -157,5 +163,82 @@ export const editFileTool: ToolDefinition = {
     ctx.log(patchDiff(relPath, before, after));
     await writeTextFile(p, after);
     return `Edited ${relPath}`;
+  },
+};
+
+export const deleteFileTool: ToolDefinition = {
+  spec: {
+    name: "delete_file",
+    description: "Delete a file at the given path relative to the repo root.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "Path relative to the repo root." } },
+      required: ["path"],
+    },
+  },
+  requiresConfirmation: true,
+  async run(args, ctx) {
+    const relPath = String(args.path);
+    validateFilename(relPath);
+    const p = resolveInRepo(ctx.repoRoot, relPath);
+    await fs.unlink(p);
+    return `Deleted ${relPath}`;
+  },
+};
+
+export const searchFilesTool: ToolDefinition = {
+  spec: {
+    name: "search_files",
+    description:
+      "Search tracked (and newly-created, not-yet-committed) files in the repository for a regex pattern " +
+      "— like `grep -rn`, but automatically skips gitignored files (node_modules, dist, etc.). Returns " +
+      "matches as path:line:text. Use this instead of read_file/list_dir to find where something is " +
+      "defined or used before reading individual files.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Extended-regex pattern to search for." },
+        path: {
+          type: "string",
+          description: "Optional path or glob to scope the search to, relative to the repo root.",
+        },
+        caseInsensitive: { type: "boolean", description: "Case-insensitive match. Defaults to false." },
+      },
+      required: ["pattern"],
+    },
+  },
+  requiresConfirmation: false,
+  readOnly: true,
+  async run(args, ctx) {
+    const pattern = String(args.pattern ?? "");
+    if (!pattern) throw new Error("pattern is required");
+
+    // git grep, not a raw shell grep: it's already available (git is a hard runtime dependency),
+    // it's fast even in large repos, and it naturally skips whatever the repo's .gitignore skips
+    // without the tool needing its own node_modules/dist/.git exclusion list. --untracked also
+    // picks up files the agent itself just created via write_file, before they're ever committed.
+    const gitArgs = ["grep", "--untracked", "-n", "-I", "-E"];
+    if (args.caseInsensitive) gitArgs.push("-i");
+    gitArgs.push("-e", pattern);
+    if (args.path) {
+      const relPath = String(args.path);
+      validateFilename(relPath);
+      gitArgs.push("--", relPath);
+    }
+
+    const result = await execSandboxed("git", gitArgs, { cwd: ctx.repoRoot, timeoutSec: 30 });
+    // git grep exits 1 for "ran fine, no matches" — only >1 is a real error (e.g. bad regex).
+    if (result.code !== 0 && result.code !== 1) {
+      throw new Error(result.stderr || result.stdout || `git grep exited with code ${result.code}`);
+    }
+    if (!result.stdout.trim()) return "No matches found.";
+
+    const lines = result.stdout.split("\n").filter(Boolean);
+    const shown = lines.slice(0, MAX_SEARCH_RESULTS);
+    const suffix =
+      lines.length > MAX_SEARCH_RESULTS
+        ? `\n… truncated to ${MAX_SEARCH_RESULTS} of ${lines.length} matches — narrow the pattern or path.`
+        : "";
+    return shown.join("\n") + suffix;
   },
 };

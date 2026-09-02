@@ -78,6 +78,7 @@
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
+            <button id="saveToDriveBtn" class="icon-btn hidden" aria-label="Save to Google Drive" title="Back up this conversation to Google Drive">💾</button>
             <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
           </div>
         </div>
@@ -109,15 +110,22 @@
         
         <label>
           Model
-          <input type="text" id="model" placeholder="meta-llama/Meta-Llama-3.1-70B-Instruct" autocomplete="off" />
-        </label>
-        <label>
-          Pick from list
           <select id="modelSelect">
             <option value="">Loading…</option>
           </select>
         </label>
         <p id="modelHint" class="hint"></p>
+
+        <label>
+          Prompt style
+          <select id="promptPreset"></select>
+        </label>
+        <p id="promptPresetHint" class="hint"></p>
+
+        <label>
+          Custom instructions
+          <textarea id="customInstructions" rows="3" placeholder="Extra guidance for this session, on top of the prompt style above…"></textarea>
+        </label>
 
         <div class="toggle-row">
           <span>Auto-approve tools</span>
@@ -132,6 +140,15 @@
         <button id="changeRepoBtn" class="secondary">Change Repository</button>
 
         <button id="signOutBtn" class="danger-btn">Sign Out</button>
+      </dialog>
+
+      <!-- Tool Confirmation Popup -->
+      <dialog id="confirmModal" class="confirm-dialog">
+        <p id="confirmQuestion" class="confirm-question"></p>
+        <div class="confirm-row">
+          <button id="confirmDenyBtn" class="deny">Deny</button>
+          <button id="confirmApproveBtn" class="approve">Approve</button>
+        </div>
       </dialog>
     </div>
     

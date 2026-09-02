@@ -18,6 +18,12 @@ services:
         sync: false
       - key: CJW_MCP_SERVERS
         sync: false # optional: JSON array of MCP connectors, see README.md
+      - key: CJW_GOOGLE_CLIENT_ID
+        sync: false # optional: "Save to Drive" backups, see README.md
+      - key: CJW_GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: CJW_GOOGLE_REFRESH_TOKEN
+        sync: false # set after completing the one-time /api/google/connect flow
       - key: CJW_DEFAULT_PROVIDER
         value: deepinfra
       - key: CJW_SESSION_TTL_MIN

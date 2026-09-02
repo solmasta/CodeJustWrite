@@ -1,8 +1,11 @@
-import { readFileTool, listDirTool, writeFileTool, editFileTool } from "./fs.js";
+import { readFileTool, listDirTool, writeFileTool, editFileTool, deleteFileTool, searchFilesTool } from "./fs.js";
 import { runShellTool } from "./shell.js";
 import {
   gitStatusTool,
   gitDiffTool,
+  gitLogTool,
+  gitStashTool,
+  gitStashPopTool,
   gitCreateBranchTool,
   gitFetchTool,
   gitCheckoutTool,
@@ -11,7 +14,7 @@ import {
   gitMergeAbortTool,
   gitPushTool,
 } from "./git.js";
-import { createPullRequestTool } from "./github.js";
+import { createPullRequestTool, mergePullRequestTool, getPullRequestStatusTool } from "./github.js";
 import { runTestsTool } from "./tests.js";
 import { browserCheckTool } from "./playwright.js";
 import type { ToolDefinition } from "./types.js";
@@ -21,9 +24,14 @@ export const allTools: ToolDefinition[] = [
   listDirTool,
   writeFileTool,
   editFileTool,
+  deleteFileTool,
+  searchFilesTool,
   runShellTool,
   gitStatusTool,
   gitDiffTool,
+  gitLogTool,
+  gitStashTool,
+  gitStashPopTool,
   gitCreateBranchTool,
   gitFetchTool,
   gitCheckoutTool,
@@ -32,6 +40,8 @@ export const allTools: ToolDefinition[] = [
   gitMergeAbortTool,
   gitPushTool,
   createPullRequestTool,
+  mergePullRequestTool,
+  getPullRequestStatusTool,
   runTestsTool,
   browserCheckTool,
 ];

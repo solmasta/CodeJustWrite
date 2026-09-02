@@ -13,7 +13,7 @@ export interface CjwConfig {
 }
 
 const DEFAULT_MODELS: Record<ProviderName, string> = {
-  deepinfra: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+  deepinfra: "moonshotai/Kimi-K3",
   openrouter: "meta-llama/llama-3.1-70b-instruct",
 };
 

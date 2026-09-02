@@ -1,5 +1,6 @@
 import "./style.css";
 import type { ServerMessage, Settings } from "./types.js";
+import type { ServerMessage, Settings, PromptPreset, HistoryEntry } from "./types.js";
 import {
   loadSettings,
   persistSettings,
@@ -10,6 +11,9 @@ import {
   appendTranscript,
   updateLastTranscriptEntry,
   clearTranscript,
+  loadDraft,
+  saveDraft,
+  clearDraft,
 } from "./settings.js";
 import { createConnection } from "./connection.js";
 import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
@@ -37,12 +41,20 @@ const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
+const saveToDriveBtn = el<HTMLButtonElement>("#saveToDriveBtn");
+
+const confirmModal = el<HTMLDialogElement>("#confirmModal");
+const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
+const confirmApproveBtn = el<HTMLButtonElement>("#confirmApproveBtn");
+const confirmDenyBtn = el<HTMLButtonElement>("#confirmDenyBtn");
 
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
-const modelInput = el<HTMLInputElement>("#model");
 const modelSelect = el<HTMLSelectElement>("#modelSelect");
 const modelHint = el<HTMLParagraphElement>("#modelHint");
+const promptPresetSelect = el<HTMLSelectElement>("#promptPreset");
+const promptPresetHint = el<HTMLParagraphElement>("#promptPresetHint");
+const customInstructionsInput = el<HTMLTextAreaElement>("#customInstructions");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
@@ -57,10 +69,23 @@ const recentReposList = el<HTMLDivElement>("#recentReposList");
 // --- State ---
 let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
-let lastToolCard: HTMLDivElement | null = null;
 let settings: Settings = loadSettings();
 let isProcessing = false;
 let currentSessionId: string | null = null;
+let promptPresets: PromptPreset[] = [];
+let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Cancels any pending debounced draft save — must run alongside every clearDraft() call, or a
+ *  save scheduled just before the clear (e.g. typing right up to hitting Send) can still fire
+ *  afterward with the stale pre-clear text and silently resurrect an already-sent message as a
+ *  draft on the next reload. */
+function cancelDraftSave(): void {
+  if (draftSaveTimer) {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = null;
+  }
+}
 
 // --- Sign In ---
 async function handleSignIn(): Promise<void> {
@@ -218,6 +243,8 @@ function backToRepoPicker(): void {
   if (currentSessionId) clearTranscript(currentSessionId);
   currentSessionId = null;
   clearActiveSession();
+  cancelDraftSave();
+  clearDraft();
   settingsModal.close();
   chatHistory.innerHTML = "";
   hide(chatSection);
@@ -250,6 +277,69 @@ function connectWebSocket(sessionId: string): void {
   });
 
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
+  void refreshSaveToDriveVisibility();
+}
+
+/** Shows the "Save to Drive" button only once the server actually has Google Drive credentials
+ *  configured — the feature requires a one-time interactive setup (see /api/google/connect) that
+ *  won't be done on every deploy, so the button needs to stay hidden rather than offering an
+ *  action that would just fail. */
+async function refreshSaveToDriveVisibility(): Promise<void> {
+  try {
+    const res = await apiFetch(settings, "/api/google/status");
+    const data = await res.json();
+    saveToDriveBtn.classList.toggle("hidden", !data.configured);
+  } catch {
+    saveToDriveBtn.classList.add("hidden");
+  }
+}
+
+async function saveToDrive(): Promise<void> {
+  const active = loadActiveSession();
+  if (!active || saveToDriveBtn.disabled) return;
+  saveToDriveBtn.disabled = true;
+  const originalLabel = saveToDriveBtn.textContent;
+  saveToDriveBtn.textContent = "⏳";
+  try {
+    const res = await apiFetch(settings, `/api/session/${active.sessionId}/backup`, {
+      method: "POST",
+      body: JSON.stringify({ repoName: active.repoName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Backup failed");
+    addBubble(
+      "system",
+      `Saved a backup of this conversation to Google Drive (CodeJustWrite Backups/${active.repoName}).` +
+        (data.webViewLink ? ` ${data.webViewLink}` : "")
+    );
+  } catch (e) {
+    addBubble("system", `Couldn't save to Drive: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    saveToDriveBtn.disabled = false;
+    saveToDriveBtn.textContent = originalLabel;
+  }
+}
+
+/** A backgrounded mobile tab (minimized, switched away from) can have its WebSocket silently
+ *  killed by the OS/browser without ever firing a close event — readyState can keep reporting
+ *  OPEN indefinitely even though nothing will ever arrive again, so the normal onclose-triggered
+ *  backoff reconnect never kicks in and the app is left looking "connected" while actually inert
+ *  (isProcessing/typingIndicator stuck in whatever state they were in when backgrounded). Call
+ *  this the moment the app comes back to the foreground: if the connection isn't even claiming
+ *  to be open, reconnect immediately; if it is, send a ping and give it a few seconds to answer
+ *  before assuming it's a zombie and forcing a fresh connection. */
+function checkConnectionAlive(): void {
+  if (!connection) return;
+  if (!connection.isConnected()) {
+    connection.reconnectNow();
+    return;
+  }
+  if (livenessTimer) clearTimeout(livenessTimer);
+  connection.send({ type: "ping" });
+  livenessTimer = setTimeout(() => {
+    livenessTimer = null;
+    connection?.reconnectNow();
+  }, 4000);
 }
 
 function handleServerMessage(msg: ServerMessage): void {
@@ -259,6 +349,33 @@ function handleServerMessage(msg: ServerMessage): void {
         settings.provider = msg.provider as Settings["provider"];
         settings.model = msg.model ?? settings.model;
         persistSettings({ provider: settings.provider, model: settings.model });
+      }
+      if (msg.promptPresets?.length) {
+        promptPresets = msg.promptPresets;
+        populatePromptPresetSelect();
+      }
+      if (msg.promptPreset) {
+        settings.promptPreset = msg.promptPreset;
+        settings.customInstructions = msg.customInstructions ?? settings.customInstructions;
+        persistSettings({ promptPreset: settings.promptPreset, customInstructions: settings.customInstructions });
+      }
+      // Restores "AI is thinking…" across a reconnect that happens while a reply is still in
+      // flight server-side — without this, a page reload mid-turn would silently drop the
+      // indicator and isProcessing would stay false, letting a second message jump the queue.
+      if (typeof msg.busy === "boolean") {
+        isProcessing = msg.busy;
+        typingIndicator.classList.toggle("hidden", !msg.busy);
+      }
+      break;
+    }
+    case "history": {
+      replayHistory(msg.entries, !!msg.assistantOpen);
+      break;
+    }
+    case "pong": {
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = null;
       }
       break;
     }
@@ -283,6 +400,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case "tool_call": {
       lastToolCard = addToolCard(String(msg.name), msg.args);
       if (currentSessionId) appendTranscript(currentSessionId, { kind: "tool", name: String(msg.name), args: msg.args });
+      addToolCallLine(String(msg.name), msg.args);
       typingIndicator.classList.remove("hidden");
       break;
     }
@@ -321,6 +439,15 @@ function handleServerMessage(msg: ServerMessage): void {
       const question = String(msg.question ?? "Allow this action?");
       addConfirmCard(callId, question);
       if (currentSessionId) appendTranscript(currentSessionId, { kind: "confirm", callId, question });
+      addToolResultLine(String(msg.name ?? ""), String(msg.result ?? ""), !!msg.error);
+      break;
+    }
+    case "diff": {
+      addLogLine("call", "⎿", "", String(msg.text ?? ""));
+      break;
+    }
+    case "awaiting_confirmation": {
+      showConfirmModal(String(msg.question ?? "Allow this tool to run?"), String(msg.callId));
       break;
     }
     case "error": {
@@ -331,7 +458,10 @@ function handleServerMessage(msg: ServerMessage): void {
       // forever with no visible explanation right where they were actually looking.
       if (modelsRequestedFor) {
         text(modelHint, `Couldn't load models: ${String(msg.message ?? "unknown error")}`);
-        modelSelect.innerHTML = '<option value="">(failed to load — type a model id manually)</option>';
+        const current = settings.provider === modelsRequestedFor ? settings.model : "";
+        modelSelect.innerHTML = current
+          ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
+          : '<option value="">(no models available)</option>';
         modelsRequestedFor = null;
       }
       const errorText = `Error: ${String(msg.message ?? "Unknown error")}`;
@@ -346,26 +476,80 @@ function handleServerMessage(msg: ServerMessage): void {
       // Ignore a response to a provider the picker has since moved away from.
       if (provider !== modelsRequestedFor || provider !== providerSelect.value) break;
       const models = msg.models ?? [];
+      const current = settings.provider === provider ? settings.model : "";
       modelSelect.innerHTML = "";
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = models.length ? "— pick a model —" : "No models found";
-      modelSelect.appendChild(placeholder);
+      if (!models.length) {
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "No models found";
+        modelSelect.appendChild(placeholder);
+      }
+      let currentIncluded = false;
       for (const m of models) {
         const option = document.createElement("option");
         option.value = m.id;
         option.textContent = m.id;
+        if (m.id === current) {
+          option.selected = true;
+          currentIncluded = true;
+        }
         modelSelect.appendChild(option);
+      }
+      // The saved model may no longer be in the provider's live catalog (e.g. deprecated) —
+      // keep it selectable rather than silently swapping it for whatever sorts first.
+      if (current && !currentIncluded) {
+        const option = document.createElement("option");
+        option.value = current;
+        option.textContent = `${current} (current)`;
+        option.selected = true;
+        modelSelect.insertBefore(option, modelSelect.firstChild);
       }
       text(
         modelHint,
         models.length
-          ? `${models.length} models available for ${provider} — pick one below, or type any model id above.`
-          : `Couldn't load the model list for ${provider}. Type a model id manually.`
+          ? `${models.length} models available for ${provider}.`
+          : `Couldn't load the model list for ${provider}.`
       );
       break;
     }
   }
+}
+
+/** Rebuilds the visible chat feed from the server's recorded transcript (sent once per WS
+ *  attach, right after "state") — a page reload, or the browser/OS reclaiming a backgrounded PWA
+ *  tab, would otherwise leave the feed looking wiped even though the conversation is still fully
+ *  intact server-side. Only replays into an empty feed: a reconnect on a tab that never actually
+ *  reloaded already has everything rendered, and replaying there would duplicate it — an empty
+ *  feed is exactly what marks this as a genuine fresh load. */
+function replayHistory(entries: HistoryEntry[] | undefined, assistantOpen: boolean): void {
+  if (chatHistory.children.length > 0 || !entries?.length) return;
+  let lastBubble: HTMLDivElement | null = null;
+  for (const entry of entries) {
+    switch (entry.type) {
+      case "user":
+        addBubble("user", entry.text ?? "");
+        lastBubble = null;
+        break;
+      case "assistant":
+        lastBubble = addBubble("assistant", entry.text ?? "");
+        break;
+      case "tool_call":
+        addToolCallLine(entry.name ?? "", entry.args);
+        lastBubble = null;
+        break;
+      case "tool_result":
+        addToolResultLine(entry.name ?? "", entry.result ?? "", !!entry.error);
+        lastBubble = null;
+        break;
+      case "diff":
+        addLogLine("call", "⎿", "", entry.text ?? "");
+        lastBubble = null;
+        break;
+    }
+  }
+  // The model may have still been mid-reply when this tab reloaded — keep appending live deltas
+  // to that same bubble instead of starting a visually-duplicate new one.
+  if (assistantOpen && lastBubble) currentAssistantBubble = lastBubble;
 }
 
 function addBubble(role: "user" | "assistant" | "system", content: string): HTMLDivElement {
@@ -377,35 +561,88 @@ function addBubble(role: "user" | "assistant" | "system", content: string): HTML
   return div;
 }
 
-function addToolCard(name: string, args: unknown): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "tool-card";
-  card.innerHTML = `
-    <div class="head"><span>→ ${escapeHtml(name)}</span><span class="status">running…</span></div>
-    <div class="body">${escapeHtml(JSON.stringify(args))}</div>
-  `;
-  chatHistory.appendChild(card);
-  scrollToBottom();
-  return card;
+/** Picks one argument to show inline next to the tool name, the way Claude Code's own terminal
+ *  UI shows e.g. "Write(file.ts)" instead of the tool's full raw argument JSON — the latter used
+ *  to dump an entire file's contents into the chat feed for write_file/edit_file, which is what
+ *  buried the approve/deny buttons under a wall of text on any non-trivial change. */
+function primaryArgSummary(args: Record<string, unknown>): string {
+  const preferredKeys = ["path", "pattern", "command", "url", "branch", "title", "message", "script", "pullNumber"];
+  for (const key of preferredKeys) {
+    const value = args[key];
+    if (value === undefined || value === null || value === "") continue;
+    const s = String(value);
+    return s.length > 60 ? s.slice(0, 57) + "…" : s;
+  }
+  return "";
 }
 
-function addConfirmCard(callId: string, question: string): void {
-  const card = document.createElement("div");
-  card.className = "tool-card";
-  card.innerHTML = `
-    <div class="head"><span>⚠ confirm</span><span class="status">awaiting approval</span></div>
-    <div class="body">${escapeHtml(question)}</div>
-    <div class="confirm-row">
-      <button type="button" class="approve">Approve</button>
-      <button type="button" class="deny">Deny</button>
-    </div>
-  `;
-  chatHistory.appendChild(card);
+/** Every tool_call/tool_result/diff event appends its own independent line to the chat feed and
+ *  is never looked up or mutated afterward (only a line's own click-to-expand toggle touches it
+ *  again) — unlike the old per-tool "card" that stayed around to be updated by a later event
+ *  keyed on callId, an append-only log has no stale-reference class of bug to have in the first
+ *  place: there's nothing to correlate. */
+function addToolLine(cls: string, icon: string, text: string): HTMLDivElement {
+  const line = document.createElement("div");
+  line.className = `tool-line ${cls}`;
+  const iconEl = document.createElement("span");
+  iconEl.className = "tl-icon";
+  iconEl.textContent = icon;
+  const textEl = document.createElement("span");
+  textEl.className = "tl-text";
+  textEl.textContent = text;
+  line.append(iconEl, textEl);
+  chatHistory.appendChild(line);
   scrollToBottom();
+  return line;
+}
 
-  const status = card.querySelector(".status") as HTMLElement;
-  const row = card.querySelector(".confirm-row") as HTMLElement;
+function toolLinePreview(body: string, limit = 200): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length > limit ? oneLine.slice(0, limit - 1) + "…" : oneLine;
+}
+
+/** Appends one line summarizing a tool's output (a result or a diff/log message). Long bodies
+ *  collapse to a single-line preview with a click-to-expand toggle, entirely local to that line
+ *  — no other line or event ever needs to touch it again. */
+function addLogLine(cls: string, icon: string, prefix: string, body: string): void {
+  const bodyText = body.trim();
+  const preview = toolLinePreview(bodyText);
+  const shortText = prefix ? `${prefix}: ${preview || "(empty)"}` : preview || "(empty)";
+  const fullText = prefix ? `${prefix}: ${bodyText}` : bodyText;
+  const line = addToolLine(cls, icon, shortText);
+  if (bodyText.length > preview.length) {
+    line.classList.add("clickable");
+    const textEl = line.querySelector(".tl-text") as HTMLElement;
+    let expanded = false;
+    line.addEventListener("click", () => {
+      expanded = !expanded;
+      line.classList.toggle("expanded", expanded);
+      textEl.textContent = expanded ? fullText : shortText;
+    });
+  }
+}
+
+function addToolCallLine(name: string, args: unknown): void {
+  const argsObj = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const summary = primaryArgSummary(argsObj);
+  addToolLine("call", "→", `${name}${summary ? `(${summary})` : ""}…`);
+}
+
+function addToolResultLine(name: string, result: string, error: boolean): void {
+  addLogLine(error ? "err" : "ok", error ? "✗" : "✓", name, result || (error ? "failed" : "done"));
+}
+
+/** A single reusable popup for whichever tool is currently awaiting approval — confirmation-
+ *  requiring tools never run concurrently (see Agent.executeToolCalls), so there's always at
+ *  most one question pending and one popup is always enough. Dismissing it any way other than an
+ *  explicit choice (Escape, tapping the backdrop) counts as a deny, so the agent is never left
+ *  waiting on a decision that will never come. */
+function showConfirmModal(question: string, callId: string): void {
+  text(confirmQuestion, question);
+  let decided = false;
   const decide = (approved: boolean) => {
+    if (decided) return;
+    decided = true;
     connection?.send({ type: "tool_decision", callId, approved });
     status.textContent = approved ? "approved" : "denied";
     row.remove();
@@ -414,9 +651,20 @@ function addConfirmCard(callId: string, question: string): void {
         e.kind === "confirm" && e.callId === callId ? { ...e, decided: approved ? "approved" : "denied" } : e
       );
     }
+    addToolLine(approved ? "ok" : "err", approved ? "✓" : "✗", approved ? "Approved" : "Denied");
   };
-  card.querySelector(".approve")?.addEventListener("click", () => decide(true));
-  card.querySelector(".deny")?.addEventListener("click", () => decide(false));
+  const onApprove = () => {
+    decide(true);
+    confirmModal.close();
+  };
+  const onDeny = () => {
+    decide(false);
+    confirmModal.close();
+  };
+  confirmApproveBtn.addEventListener("click", onApprove, { once: true });
+  confirmDenyBtn.addEventListener("click", onDeny, { once: true });
+  confirmModal.addEventListener("close", () => decide(false), { once: true });
+  confirmModal.showModal();
 }
 
 function scrollToBottom(): void {
@@ -430,6 +678,8 @@ function sendChat(): void {
   addBubble("user", message);
   if (currentSessionId) appendTranscript(currentSessionId, { kind: "user", text: message });
   chatInput.value = "";
+  cancelDraftSave();
+  clearDraft();
   typingIndicator.classList.remove("hidden");
   isProcessing = true;
   connection?.send({ type: "user_message", text: message });
@@ -478,10 +728,35 @@ let modelsRequestedFor: string | null = null;
 
 function openSettings(): void {
   providerSelect.value = settings.provider || "deepinfra";
-  modelInput.value = settings.model || "";
   autoApproveCheck.checked = settings.autoApprove ?? false;
+  populatePromptPresetSelect();
+  customInstructionsInput.value = settings.customInstructions || "";
   settingsModal.showModal();
   refreshModels();
+}
+
+/** Populates the "Prompt style" dropdown from whichever preset list the server sent in its
+ *  "state" message (core's PROMPT_PRESETS, so this stays in sync without hardcoding a copy
+ *  here) — falls back to just "Default" if that hasn't arrived yet. */
+function populatePromptPresetSelect(): void {
+  const current = settings.promptPreset || "default";
+  const options = promptPresets.length
+    ? promptPresets
+    : [{ id: "default", label: "Default", description: "", instructions: "" }];
+  promptPresetSelect.innerHTML = "";
+  for (const preset of options) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = preset.label;
+    if (preset.id === current) option.selected = true;
+    promptPresetSelect.appendChild(option);
+  }
+  updatePromptPresetHint();
+}
+
+function updatePromptPresetHint(): void {
+  const preset = promptPresets.find((p) => p.id === promptPresetSelect.value);
+  text(promptPresetHint, preset?.description ?? "");
 }
 
 function closeSettings(): void {
@@ -489,13 +764,17 @@ function closeSettings(): void {
 }
 
 /** Fetches the live model catalog for whichever provider is currently selected in the dropdown,
- *  so the model field's suggestions reflect what that provider actually offers right now (Claude
- *  models included, for OpenRouter) instead of a value someone has to already know and type. */
+ *  so the model list reflects what that provider actually offers right now (Claude models
+ *  included, for OpenRouter) instead of a value someone has to already know and type — this also
+ *  keeps a deprecated/renamed model from lingering unnoticed as a hand-typed string. */
 function refreshModels(): void {
   if (!connection) return;
   const provider = providerSelect.value;
   modelsRequestedFor = provider;
-  modelSelect.innerHTML = '<option value="">Loading…</option>';
+  const current = settings.provider === provider ? settings.model : "";
+  modelSelect.innerHTML = current
+    ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
+    : '<option value="">Loading…</option>';
   text(modelHint, "Loading available models…");
   show(modelHint);
   connection.send({ type: "list_models", provider });
@@ -504,16 +783,19 @@ function refreshModels(): void {
 function saveSettings(): void {
   const previousProvider = settings.provider;
   const provider = providerSelect.value as Settings["provider"];
-  const model = modelInput.value;
+  const model = modelSelect.value || settings.model;
   const autoApprove = autoApproveCheck.checked;
+  const promptPreset = promptPresetSelect.value || settings.promptPreset;
+  const customInstructions = customInstructionsInput.value;
 
-  persistSettings({ provider, model, autoApprove });
+  persistSettings({ provider, model, autoApprove, promptPreset, customInstructions });
   settings = loadSettings();
 
   if (connection) {
     if (provider !== previousProvider) connection.send({ type: "set_provider", provider });
     connection.send({ type: "set_model", model });
     connection.send({ type: "set_auto_approve", value: autoApprove });
+    connection.send({ type: "set_prompt_mode", promptPreset, customInstructions });
   }
   settingsModal.close();
 }
@@ -530,6 +812,7 @@ function init(): void {
     hide(repoSection);
     repoSub.textContent = active.repoName;
     replayTranscript(active.sessionId);
+    chatInput.value = loadDraft();
     connectWebSocket(active.sessionId);
   } else if (settings.token) {
     void showRepoSection();
@@ -561,21 +844,35 @@ function init(): void {
       sendChat();
     }
   });
+  chatInput.addEventListener("input", () => {
+    cancelDraftSave();
+    draftSaveTimer = setTimeout(() => saveDraft(chatInput.value), 200);
+  });
 
   settingsBtn.addEventListener("click", openSettings);
+  saveToDriveBtn.addEventListener("click", () => void saveToDrive());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
-  modelSelect.addEventListener("change", () => {
-    if (!modelSelect.value) return;
-    modelInput.value = modelSelect.value;
-    modelSelect.selectedIndex = 0; // one-shot picker — the text input above is the source of truth
-  });
+  promptPresetSelect.addEventListener("change", updatePromptPresetHint);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
   });
+  confirmModal.addEventListener("click", (e) => {
+    if (e.target === confirmModal) confirmModal.close();
+  });
 
   changeRepoBtn.addEventListener("click", backToRepoPicker);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkConnectionAlive();
+  });
+  // Safari can restore a page from the back/forward cache (bfcache) instead of doing a full
+  // reload when a backgrounded PWA tab resumes — event.persisted marks that case, where
+  // visibilitychange alone may not have fired since the page was frozen rather than hidden.
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) checkConnectionAlive();
+  });
 
   signOutBtn.addEventListener("click", () => {
     void endSession();
@@ -584,6 +881,8 @@ function init(): void {
     if (currentSessionId) clearTranscript(currentSessionId);
     currentSessionId = null;
     clearActiveSession();
+    cancelDraftSave();
+    clearDraft();
     persistSettings({ token: "", recentRepos: [] });
     settings = loadSettings();
     settingsModal.close();

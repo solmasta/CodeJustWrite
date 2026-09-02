@@ -23,6 +23,27 @@ async function parseOriginSlug(repoRoot: string): Promise<RepoSlug> {
   return { owner: match[1], repo: match[2] };
 }
 
+async function currentBranch(repoRoot: string): Promise<string> {
+  return (
+    await execSandboxed("git rev-parse --abbrev-ref HEAD", { cwd: repoRoot, timeoutSec: 10 })
+  ).stdout.trim();
+}
+
+async function findOpenPrNumber(owner: string, repo: string, token: string, branch: string): Promise<number> {
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls?head=${owner}:${encodeURIComponent(branch)}&state=open`,
+    { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+  );
+  const data = (await res.json()) as Array<{ number: number }> | { message?: string };
+  if (!res.ok || !Array.isArray(data)) {
+    throw new Error(
+      `GitHub REST API error (${res.status}): ${(data as { message?: string }).message ?? JSON.stringify(data)}`
+    );
+  }
+  if (data.length === 0) throw new Error(`No open PR found for branch '${branch}'.`);
+  return data[0].number;
+}
+
 async function createPrViaRest(
   repoRoot: string,
   token: string,
@@ -100,5 +121,154 @@ export const createPullRequestTool: ToolDefinition = {
             })
           ).stdout.trim() || "main";
     return createPrViaRest(ctx.repoRoot, ctx.config.githubToken, title, body, head, base);
+  },
+};
+
+export const mergePullRequestTool: ToolDefinition = {
+  spec: {
+    name: "merge_pull_request",
+    description:
+      "Merge an open pull request. Identify it by pullNumber, or by branch (defaults to the current " +
+      "branch's PR). Uses the `gh` CLI if installed and authenticated, otherwise the GitHub REST API " +
+      "using GITHUB_TOKEN.",
+    parameters: {
+      type: "object",
+      properties: {
+        pullNumber: { type: "number", description: "PR number. Omit to look up by branch." },
+        branch: { type: "string", description: "Head branch of the PR. Defaults to the current branch." },
+        mergeMethod: {
+          type: "string",
+          enum: ["merge", "squash", "rebase"],
+          description: "Defaults to 'squash'.",
+        },
+      },
+    },
+  },
+  requiresConfirmation: true,
+  async run(args, ctx) {
+    const mergeMethod = (
+      ["merge", "squash", "rebase"].includes(String(args.mergeMethod)) ? String(args.mergeMethod) : "squash"
+    ) as "merge" | "squash" | "rebase";
+    const ref =
+      args.pullNumber != null
+        ? String(args.pullNumber)
+        : args.branch != null
+          ? String(args.branch)
+          : await currentBranch(ctx.repoRoot);
+
+    if (await ghCliAvailable(ctx.repoRoot)) {
+      const result = await execSandboxed(`gh pr merge ${ref} --${mergeMethod} --delete-branch=false`, {
+        cwd: ctx.repoRoot,
+        timeoutSec: 30,
+      });
+      if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+      return result.stdout.trim() || `Merged ${ref} (${mergeMethod}).`;
+    }
+
+    if (!ctx.config.githubToken) {
+      throw new Error(
+        "The `gh` CLI isn't installed/authenticated and GITHUB_TOKEN isn't set — can't merge a PR either way."
+      );
+    }
+    const { owner, repo } = await parseOriginSlug(ctx.repoRoot);
+    const pullNumber =
+      args.pullNumber != null ? Number(args.pullNumber) : await findOpenPrNumber(owner, repo, ctx.config.githubToken, ref);
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}/merge`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${ctx.config.githubToken}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ merge_method: mergeMethod }),
+    });
+    const data = (await res.json()) as { merged?: boolean; message?: string; sha?: string };
+    if (!res.ok || !data.merged) {
+      throw new Error(`GitHub REST API error (${res.status}): ${data.message ?? JSON.stringify(data)}`);
+    }
+    return `Merged PR #${pullNumber} (${mergeMethod}${data.sha ? `, commit ${data.sha}` : ""}).`;
+  },
+};
+
+export const getPullRequestStatusTool: ToolDefinition = {
+  spec: {
+    name: "get_pull_request_status",
+    description:
+      "Check a pull request's mergeability and CI status — open/closed/merged state, whether it has merge " +
+      "conflicts, and each check run's name/status/conclusion. Identify it by pullNumber, or by branch " +
+      "(defaults to the current branch's PR). Use this to decide whether a PR is ready to merge or needs " +
+      "a fix pushed first.",
+    parameters: {
+      type: "object",
+      properties: {
+        pullNumber: { type: "number", description: "PR number. Omit to look up by branch." },
+        branch: { type: "string", description: "Head branch of the PR. Defaults to the current branch." },
+      },
+    },
+  },
+  requiresConfirmation: false,
+  readOnly: true,
+  async run(args, ctx) {
+    const ref =
+      args.pullNumber != null
+        ? String(args.pullNumber)
+        : args.branch != null
+          ? String(args.branch)
+          : await currentBranch(ctx.repoRoot);
+
+    if (await ghCliAvailable(ctx.repoRoot)) {
+      const result = await execSandboxed(
+        `gh pr view ${ref} --json number,state,mergeable,mergeStateStatus,statusCheckRollup,url`,
+        { cwd: ctx.repoRoot, timeoutSec: 30 }
+      );
+      if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+      return result.stdout.trim();
+    }
+
+    if (!ctx.config.githubToken) {
+      throw new Error(
+        "The `gh` CLI isn't installed/authenticated and GITHUB_TOKEN isn't set — can't check PR status either way."
+      );
+    }
+    const { owner, repo } = await parseOriginSlug(ctx.repoRoot);
+    const pullNumber =
+      args.pullNumber != null ? Number(args.pullNumber) : await findOpenPrNumber(owner, repo, ctx.config.githubToken, ref);
+    const prRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, {
+      headers: { Authorization: `Bearer ${ctx.config.githubToken}`, Accept: "application/vnd.github+json" },
+    });
+    const pr = (await prRes.json()) as {
+      number: number;
+      state?: string;
+      mergeable?: boolean | null;
+      mergeable_state?: string;
+      html_url?: string;
+      head?: { sha?: string };
+      message?: string;
+    };
+    if (!prRes.ok) throw new Error(`GitHub REST API error (${prRes.status}): ${pr.message ?? JSON.stringify(pr)}`);
+
+    const sha = pr.head?.sha;
+    let checksSummary = "(no head sha to check)";
+    if (sha) {
+      const checksRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs`, {
+        headers: { Authorization: `Bearer ${ctx.config.githubToken}`, Accept: "application/vnd.github+json" },
+      });
+      const checksData = (await checksRes.json()) as {
+        check_runs?: Array<{ name: string; status: string; conclusion: string | null }>;
+      };
+      const runs = checksData.check_runs ?? [];
+      checksSummary = runs.length
+        ? runs.map((r) => `${r.name}: ${r.status}${r.conclusion ? ` (${r.conclusion})` : ""}`).join("\n")
+        : "(no check runs found)";
+    }
+
+    return [
+      `PR #${pr.number} — state: ${pr.state}, mergeable: ${pr.mergeable ?? "unknown"} (${pr.mergeable_state ?? "unknown"})`,
+      pr.html_url ?? "",
+      "Checks:",
+      checksSummary,
+    ]
+      .filter(Boolean)
+      .join("\n");
   },
 };

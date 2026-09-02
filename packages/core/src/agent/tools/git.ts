@@ -46,6 +46,7 @@ export const gitStatusTool: ToolDefinition = {
     description: "Show `git status --short --branch` for the repository.",
     parameters: { type: "object", properties: {} },
   },
+  readOnly: true,
   async run(_args, ctx) {
     const result = await git(ctx.repoRoot, ["status", "--short", "--branch"]);
     return result.stdout || "(clean)";
@@ -63,6 +64,7 @@ export const gitDiffTool: ToolDefinition = {
       },
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const gitArgs = ["diff", "HEAD"];
     if (args.path) {
@@ -71,6 +73,67 @@ export const gitDiffTool: ToolDefinition = {
     }
     const result = await git(ctx.repoRoot, gitArgs);
     return result.stdout || "(no changes)";
+  },
+};
+
+export const gitLogTool: ToolDefinition = {
+  spec: {
+    name: "git_log",
+    description: "Show recent commit history (hash, date, author, subject) for the current branch, or one path.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max commits to show. Defaults to 20." },
+        path: { type: "string", description: "Optional path to scope the log to." },
+      },
+    },
+  },
+  readOnly: true,
+  async run(args, ctx) {
+    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 200);
+    const gitArgs = ["log", `-n`, String(limit), "--date=short", "--pretty=format:%h  %ad  %an  %s"];
+    if (args.path) {
+      const safePath = validatePath(String(args.path));
+      gitArgs.push("--", safePath);
+    }
+    const result = await git(ctx.repoRoot, gitArgs);
+    checkGitSuccess(result);
+    return result.stdout || "(no commits)";
+  },
+};
+
+export const gitStashTool: ToolDefinition = {
+  spec: {
+    name: "git_stash",
+    description: "Stash the current uncommitted changes (working tree + staged), leaving a clean tree.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Optional label for the stash entry." },
+      },
+    },
+  },
+  requiresConfirmation: true,
+  async run(args, ctx) {
+    const gitArgs = ["stash", "push", "-u"];
+    if (args.message) gitArgs.push("-m", String(args.message));
+    const result = await git(ctx.repoRoot, gitArgs);
+    checkGitSuccess(result);
+    return result.stdout || result.stderr || "Stashed.";
+  },
+};
+
+export const gitStashPopTool: ToolDefinition = {
+  spec: {
+    name: "git_stash_pop",
+    description: "Re-apply the most recent stash entry to the working tree and drop it from the stash list.",
+    parameters: { type: "object", properties: {} },
+  },
+  requiresConfirmation: true,
+  async run(_args, ctx) {
+    const result = await git(ctx.repoRoot, ["stash", "pop"]);
+    checkGitSuccess(result);
+    return result.stdout || result.stderr || "Stash popped.";
   },
 };
 

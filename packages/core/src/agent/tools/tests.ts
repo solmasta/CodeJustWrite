@@ -51,11 +51,68 @@ async function installDeps(dir: string, pkgManager: "npm" | "yarn" | "pnpm"): Pr
   return { ok: false, output };
 }
 
-async function hasPackageJson(dir: string): Promise<boolean> {
+async function fileExists(dir: string, name: string): Promise<boolean> {
   return fs
-    .access(path.join(dir, "package.json"))
+    .access(path.join(dir, name))
     .then(() => true)
     .catch(() => false);
+}
+
+async function hasPackageJson(dir: string): Promise<boolean> {
+  return fileExists(dir, "package.json");
+}
+
+type Ecosystem = "node" | "python" | "go" | "rust";
+
+/** Node takes priority when multiple manifests exist (e.g. a Node repo with a `scripts/` dir that
+ *  happens to contain an unrelated Cargo.toml) since it's what this project's own detection logic
+ *  was built and tested against first. */
+async function detectEcosystem(dir: string): Promise<Ecosystem | null> {
+  if (await hasPackageJson(dir)) return "node";
+  if (await fileExists(dir, "Cargo.toml")) return "rust";
+  if (await fileExists(dir, "go.mod")) return "go";
+  if (
+    (await fileExists(dir, "pyproject.toml")) ||
+    (await fileExists(dir, "requirements.txt")) ||
+    (await fileExists(dir, "setup.py"))
+  ) {
+    return "python";
+  }
+  return null;
+}
+
+function summarize(header: string, result: { stdout: string; stderr: string; timedOut: boolean; code: number | null }): string {
+  const status = result.timedOut ? "TIMED OUT" : `exit code ${result.code}`;
+  return [`${header} (${status})`, result.stdout, result.stderr].join("\n");
+}
+
+async function runRust(dir: string): Promise<string> {
+  const result = await execSandboxed("cargo test", { cwd: dir, timeoutSec: 600 });
+  return summarize("Ran 'cargo test' in sandbox worktree", result);
+}
+
+async function runGo(dir: string): Promise<string> {
+  const download = await execSandboxed("go mod download", { cwd: dir, timeoutSec: 300 });
+  if (download.code !== 0) return `'go mod download' failed:\n${download.stderr || download.stdout}`;
+  const result = await execSandboxed("go test ./...", { cwd: dir, timeoutSec: 600 });
+  return summarize("Ran 'go test ./...' in sandbox worktree", result);
+}
+
+async function runPython(dir: string): Promise<string> {
+  const pip = "python3 -m pip";
+  if (await fileExists(dir, "requirements.txt")) {
+    const install = await execSandboxed(`${pip} install -r requirements.txt`, { cwd: dir, timeoutSec: 300 });
+    if (install.code !== 0) return `Dependency install failed in sandbox:\n${install.stderr || install.stdout}`;
+  } else if ((await fileExists(dir, "pyproject.toml")) || (await fileExists(dir, "setup.py"))) {
+    const install = await execSandboxed(`${pip} install -e .`, { cwd: dir, timeoutSec: 300 });
+    if (install.code !== 0) return `Dependency install failed in sandbox:\n${install.stderr || install.stdout}`;
+  }
+  const pytestInstall = await execSandboxed(`${pip} install pytest`, { cwd: dir, timeoutSec: 120 });
+  if (pytestInstall.code !== 0) {
+    return `Failed to install pytest in sandbox:\n${pytestInstall.stderr || pytestInstall.stdout}`;
+  }
+  const result = await execSandboxed("python3 -m pytest", { cwd: dir, timeoutSec: 600 });
+  return summarize("Ran 'pytest' in sandbox worktree", result);
 }
 
 /**
@@ -78,24 +135,30 @@ export const runTestsTool: ToolDefinition = {
   spec: {
     name: "run_tests",
     description:
-      "Run the project's test suite (and optionally lint) inside an isolated git worktree carrying the current uncommitted changes, so the real working tree is never touched. Auto-detects npm/yarn/pnpm, installs a subdirectory's own dependencies when the script delegates into one (e.g. \"cd frontend && npm test\"), and retries an npm install with --legacy-peer-deps on a peer-dependency conflict.",
+      "Run the project's test suite (and optionally lint) inside an isolated git worktree carrying the current uncommitted changes, so the real working tree is never touched. Auto-detects the ecosystem from its manifest file — package.json (npm/yarn/pnpm), Cargo.toml (cargo test), go.mod (go test), or pyproject.toml/requirements.txt/setup.py (pytest). For Node, installs a subdirectory's own dependencies when the script delegates into one (e.g. \"cd frontend && npm test\"), and retries an npm install with --legacy-peer-deps on a peer-dependency conflict. The `script` option only applies to Node projects — the other ecosystems always run their standard test command.",
     parameters: {
       type: "object",
       properties: {
         script: {
           type: "string",
-          description: "npm script to run, e.g. 'test' or 'lint'. Defaults to 'test'.",
+          description: "npm script to run, e.g. 'test' or 'lint'. Node projects only; defaults to 'test'.",
         },
       },
     },
   },
   requiresConfirmation: false,
+  isolatedResource: true,
   async run(args, ctx) {
     const script = args.script ? String(args.script) : "test";
     const wt = await createTestWorktree(ctx.repoRoot);
     try {
-      if (!(await hasPackageJson(wt.dir))) {
-        return "No package.json found — nothing to run. Provide explicit shell commands via run_shell instead.";
+      const ecosystem = await detectEcosystem(wt.dir);
+      if (ecosystem === "rust") return await runRust(wt.dir);
+      if (ecosystem === "go") return await runGo(wt.dir);
+      if (ecosystem === "python") return await runPython(wt.dir);
+      if (ecosystem !== "node") {
+        return "No recognized project manifest found (package.json/Cargo.toml/go.mod/pyproject.toml/" +
+          "requirements.txt/setup.py) — nothing to run. Provide explicit shell commands via run_shell instead.";
       }
 
       const pkgManager = await detectPackageManager(wt.dir);

@@ -6,10 +6,13 @@ import {
   Agent,
   ProviderRegistry,
   allTools,
+  buildSystemPrompt,
   connectMcpServers,
   defaultModelFor,
   execSandboxed,
   log,
+  DEFAULT_PROMPT_PRESET_ID,
+  PROMPT_PRESETS,
   type CjwConfig,
   type ModelInfo,
   type ProviderName,
@@ -17,6 +20,7 @@ import {
   type ToolDefinition,
 } from "@codejustwrite/core";
 import { redactSecrets, withGithubToken } from "./secrets.js";
+import { TranscriptRecorder, renderBackupMarkdown } from "./transcript.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
@@ -27,11 +31,18 @@ export class Session {
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
   autoApprove = false;
+  /** True for the duration of one agent.send() turn — a reconnecting client uses this (sent in
+   *  the "state" message) to restore its "AI is thinking…" indicator instead of it silently
+   *  disappearing on reload while a reply is still in flight. */
+  busy = false;
   provider: ProviderName;
   model: string;
+  promptPreset: string = DEFAULT_PROMPT_PRESET_ID;
+  customInstructions = "";
   ws: WebSocket | null = null;
 
   private agent: Agent;
+  private readonly transcript = new TranscriptRecorder();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   private readonly secrets: string[];
 
@@ -50,7 +61,10 @@ export class Session {
     const ctx: ToolContext = {
       repoRoot: this.repoRoot,
       config,
-      log: (line: string) => this.send({ type: "diff", text: line }),
+      log: (line: string) => {
+        this.transcript.diff(line);
+        this.send({ type: "diff", text: line });
+      },
       confirm: (question: string) => this.requestConfirmation(question),
     };
 
@@ -59,9 +73,19 @@ export class Session {
       getModel: () => this.model,
       ctx,
       tools: [...allTools, ...mcpTools],
-      onTextDelta: (delta) => this.send({ type: "assistant_delta", text: delta }),
-      onToolCall: (name, args) => this.send({ type: "tool_call", name, args }),
-      onToolResult: (name, result, error) => this.send({ type: "tool_result", name, result, error }),
+      systemPrompt: buildSystemPrompt(this.promptPreset, this.customInstructions),
+      onTextDelta: (delta) => {
+        this.transcript.assistantDelta(delta);
+        this.send({ type: "assistant_delta", text: delta });
+      },
+      onToolCall: (name, args, callId) => {
+        this.transcript.toolCall(name, args);
+        this.send({ type: "tool_call", name, args, callId });
+      },
+      onToolResult: (name, result, error, callId) => {
+        this.transcript.toolResult(name, result, error);
+        this.send({ type: "tool_result", name, result, error, callId });
+      },
     });
   }
 
@@ -76,8 +100,19 @@ export class Session {
       provider: this.provider,
       model: this.model,
       autoApprove: this.autoApprove,
+      busy: this.busy,
       repoRoot: this.repoRoot,
+      promptPreset: this.promptPreset,
+      customInstructions: this.customInstructions,
+      promptPresets: PROMPT_PRESETS,
     });
+    // Replays the conversation so far into a client that just (re)connected — most importantly a
+    // page that was freshly reloaded, whose chat feed would otherwise start out empty even though
+    // the Agent's own conversation history is still fully intact on this end.
+    const entries = this.transcript.getEntries();
+    if (entries.length) {
+      this.send({ type: "history", entries, assistantOpen: this.transcript.assistantOpen });
+    }
   }
 
   detach(ws: WebSocket): void {
@@ -105,6 +140,14 @@ export class Session {
     return this.registry.get(provider).listModels();
   }
 
+  /** Switches prompt mode/custom instructions in place — the agent picks it up on its next
+   *  reply without losing the conversation so far (unlike starting a fresh session). */
+  setPromptMode(promptPreset: string, customInstructions: string): void {
+    this.promptPreset = promptPreset;
+    this.customInstructions = customInstructions;
+    this.agent.setSystemPrompt(buildSystemPrompt(promptPreset, customInstructions));
+  }
+
   setAutoApprove(value: boolean): void {
     this.autoApprove = value;
     // Resolve any confirmations already waiting when auto-approve flips on.
@@ -125,12 +168,24 @@ export class Session {
 
   async handleUserMessage(text: string): Promise<void> {
     this.touch();
+    this.busy = true;
+    this.transcript.user(text);
     try {
       const finalText = await this.agent.send(text);
+      this.transcript.turnEnded();
       this.send({ type: "assistant_done", text: finalText });
     } catch (err) {
+      this.transcript.turnEnded();
       this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      this.busy = false;
     }
+  }
+
+  /** Renders the conversation so far into a Markdown note for the "Save to Drive" feature — see
+   *  renderBackupMarkdown for what it does and doesn't include. */
+  buildBackupMarkdown(repoName: string): string {
+    return renderBackupMarkdown(this.transcript.getEntries(), repoName, this.createdAt);
   }
 
   private requestConfirmation(question: string): Promise<boolean> {

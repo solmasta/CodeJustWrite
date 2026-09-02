@@ -4,6 +4,7 @@ const KEY = "cjw.settings";
 const SESSION_KEY = "cjw.activeSession";
 const TRANSCRIPT_KEY_PREFIX = "cjw.transcript.";
 const MAX_TRANSCRIPT_ENTRIES = 300;
+const DRAFT_KEY = "cjw.draft";
 
 const defaults: Settings = {
   serverUrl: "",
@@ -11,9 +12,11 @@ const defaults: Settings = {
   repoUrl: "",
   branch: "",
   provider: "deepinfra",
-  model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+  model: "moonshotai/Kimi-K3",
   autoApprove: false,
   recentRepos: [],
+  promptPreset: "default",
+  customInstructions: "",
 };
 
 export function loadSettings(): Settings {
@@ -108,6 +111,28 @@ export function updateLastTranscriptEntry(
 export function clearTranscript(sessionId: string): void {
   try {
     sessionStorage.removeItem(TRANSCRIPT_KEY_PREFIX + sessionId);
+/** The message box's not-yet-sent text, kept per tab so a refresh mid-typing (or a background
+ *  reload the browser/OS triggers on its own) doesn't silently discard it. */
+export function loadDraft(): string {
+  try {
+    return sessionStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveDraft(text: string): void {
+  try {
+    if (text) sessionStorage.setItem(DRAFT_KEY, text);
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // sessionStorage unavailable — the draft just won't survive a reload.
+  }
+}
+
+export function clearDraft(): void {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
   } catch {
     // no-op
   }

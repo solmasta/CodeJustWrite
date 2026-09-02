@@ -1,6 +1,10 @@
 import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
-import type { ToolDefinition } from "./types.js";
+import type { ToolDefinition, ToolResult } from "./types.js";
+
+// Above this, skip attaching the screenshot as an image (still saved to disk) rather than risk
+// a request a vision model's own size limit would reject outright.
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 
 /**
  * Some pre-provisioned sandboxes ship a browser build pinned to a different
@@ -28,7 +32,9 @@ export const browserCheckTool: ToolDefinition = {
     name: "browser_check",
     description:
       "Drive a headless Chromium browser (via Playwright) to a URL, optionally perform a sequence of actions " +
-      "(click/fill/waitForSelector/evaluate/goto), capture console errors, and save a screenshot. " +
+      "(click/fill/waitForSelector/evaluate/goto), capture console errors, and save a screenshot. The " +
+      "screenshot is also shown to you directly (vision-capable models only) so you can actually see " +
+      "layout/styling bugs a console-error check alone would miss — not just its file path. " +
       "Use this to visually verify a web UI change actually works, e.g. against a locally running dev server.",
     parameters: {
       type: "object",
@@ -54,6 +60,7 @@ export const browserCheckTool: ToolDefinition = {
     },
   },
   requiresConfirmation: false,
+  isolatedResource: true,
   async run(args, ctx) {
     const { chromium } = await import("playwright");
     const url = String(args.url);
@@ -93,20 +100,32 @@ export const browserCheckTool: ToolDefinition = {
 
       const title = await page.title();
       let screenshotPath: string | null = null;
+      let imageDataUrl: string | null = null;
       if (takeScreenshot) {
         const dir = path.join(ctx.repoRoot, ".cjw", "screenshots");
         await fs.mkdir(dir, { recursive: true });
         screenshotPath = path.join(dir, `check-${Date.now()}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
+        const bytes = await fs.readFile(screenshotPath);
+        if (bytes.byteLength <= MAX_SCREENSHOT_BYTES) {
+          imageDataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+        }
       }
 
-      return [
+      const text = [
         `Loaded ${url} — title: "${title}"`,
         screenshotPath ? `Screenshot saved to ${path.relative(ctx.repoRoot, screenshotPath)}` : null,
         consoleMessages.length ? `Console errors:\n${consoleMessages.join("\n")}` : "No console errors.",
+        takeScreenshot && !imageDataUrl
+          ? "(Screenshot too large to show directly — inspect the saved file instead.)"
+          : null,
       ]
         .filter(Boolean)
         .join("\n");
+
+      const result: ToolResult = { text };
+      if (imageDataUrl) result.images = [imageDataUrl];
+      return result;
     } finally {
       await browser.close();
     }
