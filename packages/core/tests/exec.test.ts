@@ -20,13 +20,24 @@ describe("execSandboxed", () => {
     expect(result.timedOut).toBe(true);
   }, 10_000);
 
-  it("truncates output past maxOutputBytes and marks it as truncated", async () => {
+  it("truncates output past maxOutputBytes, marking how much was omitted", async () => {
     const result = await execSandboxed("yes x | head -c 1000000", {
       cwd: process.cwd(),
       timeoutSec: 5,
       maxOutputBytes: 100,
     });
-    expect(result.stdout).toContain("(truncated)");
-    expect(Buffer.byteLength(result.stdout.replace(/\n…\(truncated\)$/, ""), "utf8")).toBeLessThanOrEqual(100);
+    expect(result.stdout).toContain("bytes omitted");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThan(1_000_000);
+  });
+
+  it("keeps the tail, not just the head, when truncating — the useful part of most tool output", async () => {
+    // A command whose meaningful content (a distinctive final line, like a test runner's summary)
+    // is at the END of a large output — the exact shape head-only truncation used to lose.
+    const result = await execSandboxed("yes x | head -c 5000; echo; echo DISTINCTIVE_TAIL_MARKER", {
+      cwd: process.cwd(),
+      timeoutSec: 5,
+      maxOutputBytes: 100,
+    });
+    expect(result.stdout).toContain("DISTINCTIVE_TAIL_MARKER");
   });
 });

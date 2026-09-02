@@ -46,6 +46,7 @@ export const gitStatusTool: ToolDefinition = {
     description: "Show `git status --short --branch` for the repository.",
     parameters: { type: "object", properties: {} },
   },
+  readOnly: true,
   async run(_args, ctx) {
     const result = await git(ctx.repoRoot, ["status", "--short", "--branch"]);
     return result.stdout || "(clean)";
@@ -63,6 +64,7 @@ export const gitDiffTool: ToolDefinition = {
       },
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const gitArgs = ["diff", "HEAD"];
     if (args.path) {
@@ -86,6 +88,7 @@ export const gitLogTool: ToolDefinition = {
       },
     },
   },
+  readOnly: true,
   async run(args, ctx) {
     const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 200);
     const gitArgs = ["log", `-n`, String(limit), "--date=short", "--pretty=format:%h  %ad  %an  %s"];

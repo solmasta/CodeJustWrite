@@ -14,7 +14,11 @@ export interface ExecOptions {
   maxOutputBytes?: number;
 }
 
-const DEFAULT_MAX_OUTPUT_BYTES = 200_000;
+// Halved from a prior 200_000 now that truncation keeps head+tail instead of head-only (see
+// truncate() below) — a smaller cap is safe because what's kept is far more information-dense,
+// and it means less of every large run_shell/run_tests output gets resent as tokens on every
+// subsequent turn of the conversation.
+const DEFAULT_MAX_OUTPUT_BYTES = 100_000;
 
 /**
  * Runs a command as a constrained subprocess: bounded wall-clock timeout,
@@ -66,10 +70,18 @@ export function execSandboxed(
     }, timeoutMs);
 
     function truncate(str: string): string {
-      if (Buffer.byteLength(str, "utf8") <= maxOutputBytes) return str;
-      // Trim to byte limit, preserving valid UTF-8
       const buf = Buffer.from(str, "utf8");
-      return buf.subarray(0, maxOutputBytes).toString("utf8") + "\n…(truncated)";
+      if (buf.byteLength <= maxOutputBytes) return str;
+      // Keep a small head (what ran, early setup output) and most of the tail — a command's
+      // actually useful content (test summaries, "N failed", the final error) is almost always
+      // at the end, not the beginning, so a head-only truncation was systematically dropping the
+      // part that mattered most on any output big enough to hit the cap.
+      const headBytes = Math.min(Math.floor(maxOutputBytes * 0.2), buf.byteLength);
+      const tailBytes = maxOutputBytes - headBytes;
+      const head = buf.subarray(0, headBytes).toString("utf8");
+      const tail = buf.subarray(buf.byteLength - tailBytes).toString("utf8");
+      const omittedBytes = buf.byteLength - headBytes - tailBytes;
+      return `${head}\n…(${omittedBytes} bytes omitted)…\n${tail}`;
     }
 
     child.stdout?.setEncoding("utf8");

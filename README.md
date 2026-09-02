@@ -201,6 +201,32 @@ pick a different one without signing out.
     Chromium at build time (`playwright install --with-deps chromium`); a
     non-Docker deploy needs to run that manually.
 
+## Performance and token usage
+
+- **Parallel tool calls**: when a model requests several *read-only* tools in
+  one turn (`read_file`, `list_dir`, `search_files`, `git_status`, `git_diff`,
+  `git_log`, `get_pull_request_status` — no side effects, no ordering
+  dependency on each other), they run concurrently instead of one at a time.
+  Any call that writes, mutates git state, or isn't on that list keeps the
+  whole batch sequential, so nothing risky ever races. This cuts wall-clock
+  latency for investigation-heavy turns — it does not reduce token usage,
+  since the model still only sees one round of results either way.
+- **Token usage** is dominated by the full conversation history being resent
+  on every turn, so the real levers are: (1) provider-side prompt caching on
+  that resent prefix — both DeepInfra and OpenRouter discount repeated
+  input tokens heavily (DeepInfra's cached-input pricing runs roughly
+  80-92% off standard input for the models checked at the time of writing),
+  and this project's history is append-only with a stable prefix, so it
+  should already benefit without any special handling; and (2) how much of
+  each tool's own output gets kept. `run_shell`/`run_tests` cap combined
+  stdout+stderr at 100KB by default, keeping the first ~20% and the *last*
+  ~80% of that budget rather than a single head-only cut — a command's
+  actually useful content (a test summary, "N failed", the final error) is
+  almost always at the end of its output, not the beginning.
+- Use `/clear` (CLI) or starting a new session (PWA) to reset the
+  conversation once a long session's resent history stops being worth its
+  token cost.
+
 ### MCP connectors (static API key/token)
 
 Beyond the built-in tools above, the agent can attach external [MCP]

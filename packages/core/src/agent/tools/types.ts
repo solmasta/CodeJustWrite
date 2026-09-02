@@ -26,4 +26,10 @@ export interface ToolDefinition {
   run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string | ToolResult>;
   /** Risky tools (writes, shell exec, git mutations, PR creation) require confirmation unless auto-approved. */
   requiresConfirmation?: boolean;
+  /** No side effects and no ordering dependency on any other tool call — safe to run concurrently
+   *  with other readOnly calls from the same model turn (e.g. several read_file/search_files
+   *  calls at once). Leave unset/false for anything that mutates state or shares a resource
+   *  (worktrees, the browser process, git refs) where a race could cause real damage; when in
+   *  doubt, leave it false — the fallback is always safe, just serial. */
+  readOnly?: boolean;
 }
