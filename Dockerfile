@@ -47,7 +47,15 @@ COPY --from=builder /app/apps/web/dist ./apps/web/dist
 # `playwright` package is present (it's a regular dependency) but no browser
 # binary is, so every browser_check call fails at runtime — install the
 # matching Chromium build plus its OS-level libraries now.
-RUN npx playwright install --with-deps chromium \
+#
+# Invoke the CLI via its own script rather than `npx playwright`: apps/web's
+# devDependency on @playwright/test wins the shared node_modules/.bin/playwright
+# symlink over packages/core's plain `playwright` dependency, and the builder
+# stage's `npm prune --omit=dev` then deletes @playwright/test (dev-only),
+# leaving that symlink dangling — `npx playwright` fails with
+# "sh: 1: playwright: not found" even though the `playwright` package itself
+# (a real, non-dev dependency) is right there.
+RUN node node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8787
