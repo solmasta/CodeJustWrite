@@ -1,6 +1,15 @@
 import "./style.css";
-import type { ServerMessage, Settings, PromptPreset } from "./types.js";
-import { loadSettings, persistSettings, loadActiveSession, saveActiveSession, clearActiveSession } from "./settings.js";
+import type { ServerMessage, Settings, PromptPreset, HistoryEntry } from "./types.js";
+import {
+  loadSettings,
+  persistSettings,
+  loadActiveSession,
+  saveActiveSession,
+  clearActiveSession,
+  loadDraft,
+  saveDraft,
+  clearDraft,
+} from "./settings.js";
 import { createConnection } from "./connection.js";
 import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
 
@@ -57,6 +66,18 @@ let currentAssistantBubble: HTMLDivElement | null = null;
 let settings: Settings = loadSettings();
 let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
+let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Cancels any pending debounced draft save — must run alongside every clearDraft() call, or a
+ *  save scheduled just before the clear (e.g. typing right up to hitting Send) can still fire
+ *  afterward with the stale pre-clear text and silently resurrect an already-sent message as a
+ *  draft on the next reload. */
+function cancelDraftSave(): void {
+  if (draftSaveTimer) {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = null;
+  }
+}
 
 // --- Sign In ---
 async function handleSignIn(): Promise<void> {
@@ -212,6 +233,8 @@ function backToRepoPicker(): void {
   connection?.close();
   connection = null;
   clearActiveSession();
+  cancelDraftSave();
+  clearDraft();
   settingsModal.close();
   chatHistory.innerHTML = "";
   hide(chatSection);
@@ -262,6 +285,17 @@ function handleServerMessage(msg: ServerMessage): void {
         settings.customInstructions = msg.customInstructions ?? settings.customInstructions;
         persistSettings({ promptPreset: settings.promptPreset, customInstructions: settings.customInstructions });
       }
+      // Restores "AI is thinking…" across a reconnect that happens while a reply is still in
+      // flight server-side — without this, a page reload mid-turn would silently drop the
+      // indicator and isProcessing would stay false, letting a second message jump the queue.
+      if (typeof msg.busy === "boolean") {
+        isProcessing = msg.busy;
+        typingIndicator.classList.toggle("hidden", !msg.busy);
+      }
+      break;
+    }
+    case "history": {
+      replayHistory(msg.entries, !!msg.assistantOpen);
       break;
     }
     case "assistant_delta": {
@@ -354,6 +388,43 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
   }
+}
+
+/** Rebuilds the visible chat feed from the server's recorded transcript (sent once per WS
+ *  attach, right after "state") — a page reload, or the browser/OS reclaiming a backgrounded PWA
+ *  tab, would otherwise leave the feed looking wiped even though the conversation is still fully
+ *  intact server-side. Only replays into an empty feed: a reconnect on a tab that never actually
+ *  reloaded already has everything rendered, and replaying there would duplicate it — an empty
+ *  feed is exactly what marks this as a genuine fresh load. */
+function replayHistory(entries: HistoryEntry[] | undefined, assistantOpen: boolean): void {
+  if (chatHistory.children.length > 0 || !entries?.length) return;
+  let lastBubble: HTMLDivElement | null = null;
+  for (const entry of entries) {
+    switch (entry.type) {
+      case "user":
+        addBubble("user", entry.text ?? "");
+        lastBubble = null;
+        break;
+      case "assistant":
+        lastBubble = addBubble("assistant", entry.text ?? "");
+        break;
+      case "tool_call":
+        addToolCallLine(entry.name ?? "", entry.args);
+        lastBubble = null;
+        break;
+      case "tool_result":
+        addToolResultLine(entry.name ?? "", entry.result ?? "", !!entry.error);
+        lastBubble = null;
+        break;
+      case "diff":
+        addLogLine("call", "⎿", "", entry.text ?? "");
+        lastBubble = null;
+        break;
+    }
+  }
+  // The model may have still been mid-reply when this tab reloaded — keep appending live deltas
+  // to that same bubble instead of starting a visually-duplicate new one.
+  if (assistantOpen && lastBubble) currentAssistantBubble = lastBubble;
 }
 
 function addBubble(role: "user" | "assistant" | "system", content: string): HTMLDivElement {
@@ -474,6 +545,8 @@ function sendChat(): void {
   if (!message) return;
   addBubble("user", message);
   chatInput.value = "";
+  cancelDraftSave();
+  clearDraft();
   typingIndicator.classList.remove("hidden");
   isProcessing = true;
   connection?.send({ type: "user_message", text: message });
@@ -567,6 +640,7 @@ function init(): void {
     hide(signInSection);
     hide(repoSection);
     repoSub.textContent = active.repoName;
+    chatInput.value = loadDraft();
     connectWebSocket(active.sessionId);
   } else if (settings.token) {
     void showRepoSection();
@@ -598,6 +672,10 @@ function init(): void {
       sendChat();
     }
   });
+  chatInput.addEventListener("input", () => {
+    cancelDraftSave();
+    draftSaveTimer = setTimeout(() => saveDraft(chatInput.value), 200);
+  });
 
   settingsBtn.addEventListener("click", openSettings);
   saveSettingsBtn.addEventListener("click", saveSettings);
@@ -618,6 +696,8 @@ function init(): void {
     connection?.close();
     connection = null;
     clearActiveSession();
+    cancelDraftSave();
+    clearDraft();
     persistSettings({ token: "", recentRepos: [] });
     settings = loadSettings();
     settingsModal.close();

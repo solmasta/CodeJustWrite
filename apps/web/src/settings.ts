@@ -2,6 +2,7 @@ import type { ActiveSession, Settings } from "./types.js";
 
 const KEY = "cjw.settings";
 const SESSION_KEY = "cjw.activeSession";
+const DRAFT_KEY = "cjw.draft";
 
 const defaults: Settings = {
   serverUrl: "",
@@ -57,6 +58,33 @@ export function saveActiveSession(session: ActiveSession): void {
 export function clearActiveSession(): void {
   try {
     sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // no-op
+  }
+}
+
+/** The message box's not-yet-sent text, kept per tab so a refresh mid-typing (or a background
+ *  reload the browser/OS triggers on its own) doesn't silently discard it. */
+export function loadDraft(): string {
+  try {
+    return sessionStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveDraft(text: string): void {
+  try {
+    if (text) sessionStorage.setItem(DRAFT_KEY, text);
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // sessionStorage unavailable — the draft just won't survive a reload.
+  }
+}
+
+export function clearDraft(): void {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
   } catch {
     // no-op
   }
