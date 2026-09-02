@@ -35,6 +35,18 @@ export interface ActiveSession {
   repoName: string;
 }
 
+/** One entry of a replayed conversation (see ServerMessage.entries) — same shape as the live
+ *  events (tool_call/tool_result/diff/assistant text) that already render into the chat feed,
+ *  minus callId, which an append-only log has no need to correlate by. */
+export interface HistoryEntry {
+  type: "user" | "assistant" | "tool_call" | "tool_result" | "diff";
+  text?: string;
+  name?: string;
+  args?: unknown;
+  result?: string;
+  error?: boolean;
+}
+
 export interface ServerMessage {
   type:
     | "assistant_delta"
@@ -45,7 +57,8 @@ export interface ServerMessage {
     | "awaiting_confirmation"
     | "error"
     | "state"
-    | "models";
+    | "models"
+    | "history";
   text?: string;
   name?: string;
   args?: unknown;
@@ -57,11 +70,14 @@ export interface ServerMessage {
   provider?: string;
   model?: string;
   autoApprove?: boolean;
+  busy?: boolean;
   repoRoot?: string;
   models?: { id: string }[];
   promptPreset?: string;
   customInstructions?: string;
   promptPresets?: PromptPreset[];
+  entries?: HistoryEntry[];
+  assistantOpen?: boolean;
 }
 
 export interface ChatMessage {
