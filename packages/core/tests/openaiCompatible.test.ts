@@ -1,7 +1,27 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createOpenAICompatibleProvider } from "../src/providers/openaiCompatible.js";
+import { createOpenAICompatibleProvider, toOpenAIMessages } from "../src/providers/openaiCompatible.js";
+
+describe("toOpenAIMessages", () => {
+  it("serializes a user message's images as multimodal content parts alongside the text", () => {
+    const [message] = toOpenAIMessages([
+      { role: "user", content: "what's in this screenshot?", images: ["data:image/png;base64,AAAA"] },
+    ]);
+    expect(message).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "what's in this screenshot?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+    });
+  });
+
+  it("leaves an ordinary text-only user message as a plain string", () => {
+    const [message] = toOpenAIMessages([{ role: "user", content: "hello" }]);
+    expect(message).toEqual({ role: "user", content: "hello" });
+  });
+});
 
 describe("createOpenAICompatibleProvider listModels", () => {
   let server: Server;

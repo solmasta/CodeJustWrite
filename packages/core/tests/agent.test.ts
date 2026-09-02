@@ -98,3 +98,76 @@ describe("Agent recovering a fake (text-only) tool call", () => {
     expect(provider.calls).toBe(1);
   });
 });
+
+describe("Agent showing a tool's image result to the model", () => {
+  it("pushes a follow-up user message carrying the image(s) after the tool-role result", async () => {
+    const screenshotTool: ToolDefinition = {
+      spec: { name: "browser_check", description: "check", parameters: { type: "object", properties: {} } },
+      async run() {
+        return { text: "Loaded page.", images: ["data:image/png;base64,AAAA"] };
+      },
+    };
+
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [{ id: "call1", name: "browser_check", arguments: "{}" }],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "Looks good." }, finishReason: "stop" },
+    ]);
+
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [screenshotTool],
+    });
+
+    await agent.send("check the homepage");
+
+    const history = agent.getHistory();
+    const toolIndex = history.findIndex((m) => m.role === "tool");
+    expect(history[toolIndex]?.content).toBe("Loaded page.");
+    const followUp = history[toolIndex + 1];
+    expect(followUp?.role).toBe("user");
+    expect(followUp?.images).toEqual(["data:image/png;base64,AAAA"]);
+  });
+
+  it("doesn't add a follow-up message for a plain string tool result", async () => {
+    const textTool: ToolDefinition = {
+      spec: { name: "list_dir", description: "list", parameters: { type: "object", properties: {} } },
+      async run() {
+        return "src, tests";
+      },
+    };
+
+    const provider = new ScriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [{ id: "call1", name: "list_dir", arguments: "{}" }],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "Done." }, finishReason: "stop" },
+    ]);
+
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [textTool],
+    });
+
+    await agent.send("list the repo");
+
+    const history = agent.getHistory();
+    const toolIndex = history.findIndex((m) => m.role === "tool");
+    expect(history[toolIndex + 1]?.role).not.toBe("user");
+  });
+});

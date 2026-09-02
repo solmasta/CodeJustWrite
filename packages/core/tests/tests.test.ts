@@ -23,11 +23,11 @@ async function initGitRepo(dir: string): Promise<void> {
 }
 
 describe("run_tests", () => {
-  it("reports no package.json rather than failing when there's nothing to run", async () => {
+  it("reports no recognized manifest rather than failing when there's nothing to run", async () => {
     const dir = tempDir("cjw-tests-empty-");
     await initGitRepo(dir);
     const output = await runTestsTool.run({}, makeCtx(dir));
-    expect(output).toContain("No package.json found");
+    expect(output).toContain("No recognized project manifest found");
   });
 
   it(

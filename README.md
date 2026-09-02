@@ -141,30 +141,42 @@ pick a different one without signing out.
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique
-  find/replace), all confined to the repository root.
-- **Git & GitHub** — `git_status`, `git_diff`, `git_create_branch`,
-  `git_fetch`, `git_checkout`, `git_commit`, `git_merge`, `git_merge_abort`,
-  `git_push`, and `create_pull_request` (uses the `gh` CLI when installed and
-  authenticated, otherwise falls back to the GitHub REST API with a
-  `GITHUB_TOKEN`). `git_merge` automatically deepens a shallow clone's
+  find/replace), `delete_file`, all confined to the repository root.
+- **search_files** — `git grep`-backed regex search across tracked and
+  newly-created (not-yet-committed) files, automatically skipping whatever
+  the repo's `.gitignore` skips. Read-only, no approval needed — the agent's
+  main way to find where something is defined or used without reading files
+  one at a time.
+- **Git & GitHub** — `git_status`, `git_diff`, `git_log`, `git_stash`,
+  `git_stash_pop`, `git_create_branch`, `git_fetch`, `git_checkout`,
+  `git_commit`, `git_merge`, `git_merge_abort`, `git_push`,
+  `create_pull_request`, `merge_pull_request`, and `get_pull_request_status`
+  (checks/mergeability — read-only). The PR tools use the `gh` CLI when
+  installed and authenticated, otherwise fall back to the GitHub REST API
+  with a `GITHUB_TOKEN`. `git_merge` automatically deepens a shallow clone's
   history and retries once if that's the only reason two branches look
   unrelated.
 - **Sandbox**
   - `run_shell` — constrained subprocess execution with a wall-clock timeout
     and truncated output.
   - `run_tests` — spins up a disposable `git worktree` carrying uncommitted
-    changes, auto-detects npm/yarn/pnpm, installs deps, and runs the
-    test/lint script there — the real working tree is never touched. Also
-    installs a subdirectory's own dependencies when the script just `cd`s
-    into one (common in repos that aren't a formal npm/yarn/pnpm workspace,
-    e.g. `"test": "cd frontend && npm test"`), and retries a failed npm
-    install with `--legacy-peer-deps` on a peer-dependency conflict.
+    changes, auto-detects the ecosystem from its manifest — `package.json`
+    (npm/yarn/pnpm), `Cargo.toml` (`cargo test`), `go.mod` (`go test`), or
+    `pyproject.toml`/`requirements.txt`/`setup.py` (`pytest`, installing deps
+    first) — and runs its test/lint step there; the real working tree is
+    never touched. For Node, also installs a subdirectory's own dependencies
+    when the script just `cd`s into one (common in repos that aren't a
+    formal npm/yarn/pnpm workspace, e.g. `"test": "cd frontend && npm
+    test"`), and retries a failed npm install with `--legacy-peer-deps` on a
+    peer-dependency conflict.
   - `browser_check` — drives headless Chromium via Playwright to a URL,
     performs click/fill/waitForSelector/evaluate actions, captures console
-    errors, and saves a screenshot. Requires Chromium to actually be
-    installed wherever the agent is running (`npx playwright install
-    chromium`); the Docker image doesn't bundle it by default to keep the
-    image small.
+    errors, and saves a screenshot. The screenshot is also attached directly
+    to the next model turn as an image (vision-capable models only) — so a
+    layout/styling bug that never throws a console error can still be
+    caught, not just confirmed to have loaded. The Docker image installs
+    Chromium at build time (`playwright install --with-deps chromium`); a
+    non-Docker deploy needs to run that manually.
 
 ### MCP connectors (static API key/token)
 

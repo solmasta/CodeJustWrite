@@ -101,9 +101,21 @@ export class Agent {
     }
 
     try {
-      const output = await tool.run(args, this.deps.ctx);
+      const raw = await tool.run(args, this.deps.ctx);
+      const output = typeof raw === "string" ? raw : raw.text;
+      const images = typeof raw === "string" ? undefined : raw.images;
       this.deps.onToolResult?.(call.name, output, false);
       this.history.push({ role: "tool", toolCallId: call.id, name: call.name, content: output });
+      if (images?.length) {
+        // A tool-role message can't carry images in the OpenAI-compatible wire format — this is
+        // the only way a vision-capable model actually gets to see e.g. a browser_check screenshot
+        // rather than just the console-error text that came back in the tool result above.
+        this.history.push({
+          role: "user",
+          content: `(${call.name} screenshot above — look at it before continuing.)`,
+          images,
+        });
+      }
     } catch (err) {
       const msg = `Error: ${err instanceof Error ? err.message : String(err)}`;
       this.deps.onToolResult?.(call.name, msg, true);
