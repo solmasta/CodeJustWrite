@@ -28,6 +28,11 @@ const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 
+const confirmModal = el<HTMLDialogElement>("#confirmModal");
+const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
+const confirmApproveBtn = el<HTMLButtonElement>("#confirmApproveBtn");
+const confirmDenyBtn = el<HTMLButtonElement>("#confirmDenyBtn");
+
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
 const providerSelect = el<HTMLSelectElement>("#provider");
 const modelSelect = el<HTMLSelectElement>("#modelSelect");
@@ -49,12 +54,6 @@ const recentReposList = el<HTMLDivElement>("#recentReposList");
 // --- State ---
 let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
-let lastToolCard: HTMLDivElement | null = null;
-let lastToolName = "";
-/** Correlates a tool_result event to the card its tool_call created, by callId — needed because
- *  a concurrent batch of tool calls fires all of its tool_call events before any of their
- *  tool_result events, so lastToolCard alone can no longer identify the right card. */
-const toolCardsByCallId = new Map<string, HTMLDivElement>();
 let settings: Settings = loadSettings();
 let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
@@ -278,33 +277,20 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "tool_call": {
-      lastToolName = String(msg.name);
-      lastToolCard = addToolCard(lastToolName, msg.args);
-      // Concurrent batches (see Agent.executeToolCalls on the server) can fire several tool_call
-      // events before any of their tool_result events arrive, so "the most recently created
-      // card" (lastToolCard) is no longer a safe way to find the right one for a result — key by
-      // callId instead. diff/awaiting_confirmation still use lastToolCard: those only ever occur
-      // for confirmation-requiring tools, which never run in a concurrent batch, so that pairing
-      // stays strictly sequential and correct.
-      if (msg.callId) toolCardsByCallId.set(msg.callId, lastToolCard);
+      addToolCallLine(String(msg.name), msg.args);
       typingIndicator.classList.remove("hidden");
       break;
     }
     case "tool_result": {
-      const card = (msg.callId && toolCardsByCallId.get(msg.callId)) || lastToolCard;
-      if (msg.callId) toolCardsByCallId.delete(msg.callId);
-      if (card) {
-        setCardStatus(card, msg.error ? "error" : "done", msg.error ? "err" : "ok");
-        appendToolOutput(card, String(msg.result ?? ""));
-      }
+      addToolResultLine(String(msg.name ?? ""), String(msg.result ?? ""), !!msg.error);
       break;
     }
     case "diff": {
-      if (lastToolCard) appendToolOutput(lastToolCard, String(msg.text ?? ""));
+      addLogLine("call", "⎿", "", String(msg.text ?? ""));
       break;
     }
     case "awaiting_confirmation": {
-      if (lastToolCard) showConfirmInCard(lastToolCard, String(msg.callId), lastToolName);
+      showConfirmModal(String(msg.question ?? "Allow this tool to run?"), String(msg.callId));
       break;
     }
     case "error": {
@@ -394,79 +380,88 @@ function primaryArgSummary(args: Record<string, unknown>): string {
   return "";
 }
 
-function setCardStatus(card: HTMLDivElement, label: string, cls: "ok" | "err" | "wait" | ""): void {
-  const status = card.querySelector(".status") as HTMLElement;
-  status.textContent = label;
-  status.className = `status ${cls}`;
+/** Every tool_call/tool_result/diff event appends its own independent line to the chat feed and
+ *  is never looked up or mutated afterward (only a line's own click-to-expand toggle touches it
+ *  again) — unlike the old per-tool "card" that stayed around to be updated by a later event
+ *  keyed on callId, an append-only log has no stale-reference class of bug to have in the first
+ *  place: there's nothing to correlate. */
+function addToolLine(cls: string, icon: string, text: string): HTMLDivElement {
+  const line = document.createElement("div");
+  line.className = `tool-line ${cls}`;
+  const iconEl = document.createElement("span");
+  iconEl.className = "tl-icon";
+  iconEl.textContent = icon;
+  const textEl = document.createElement("span");
+  textEl.className = "tl-text";
+  textEl.textContent = text;
+  line.append(iconEl, textEl);
+  chatHistory.appendChild(line);
+  scrollToBottom();
+  return line;
 }
 
-/** Appends to the card's collapsed-by-default output pane and keeps its toggle label's line
- *  count current, revealing the toggle the first time there's anything to show. */
-function appendToolOutput(card: HTMLDivElement, chunk: string): void {
-  if (!chunk) return;
-  const body = card.querySelector(".body") as HTMLElement;
-  const toggle = card.querySelector(".tc-toggle") as HTMLButtonElement;
-  body.textContent = body.textContent ? `${body.textContent}\n\n${chunk}` : chunk;
-  const lineCount = body.textContent.split("\n").length;
-  const expanded = toggle.getAttribute("aria-expanded") === "true";
-  toggle.textContent = `⎿ ${lineCount} line${lineCount === 1 ? "" : "s"} — tap to ${expanded ? "collapse" : "expand"}`;
-  show(toggle);
+function toolLinePreview(body: string, limit = 200): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length > limit ? oneLine.slice(0, limit - 1) + "…" : oneLine;
 }
 
-function addToolCard(name: string, args: unknown): HTMLDivElement {
-  const argsObj = (args && typeof args === "object" ? (args as Record<string, unknown>) : {});
+/** Appends one line summarizing a tool's output (a result or a diff/log message). Long bodies
+ *  collapse to a single-line preview with a click-to-expand toggle, entirely local to that line
+ *  — no other line or event ever needs to touch it again. */
+function addLogLine(cls: string, icon: string, prefix: string, body: string): void {
+  const bodyText = body.trim();
+  const preview = toolLinePreview(bodyText);
+  const shortText = prefix ? `${prefix}: ${preview || "(empty)"}` : preview || "(empty)";
+  const fullText = prefix ? `${prefix}: ${bodyText}` : bodyText;
+  const line = addToolLine(cls, icon, shortText);
+  if (bodyText.length > preview.length) {
+    line.classList.add("clickable");
+    const textEl = line.querySelector(".tl-text") as HTMLElement;
+    let expanded = false;
+    line.addEventListener("click", () => {
+      expanded = !expanded;
+      line.classList.toggle("expanded", expanded);
+      textEl.textContent = expanded ? fullText : shortText;
+    });
+  }
+}
+
+function addToolCallLine(name: string, args: unknown): void {
+  const argsObj = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
   const summary = primaryArgSummary(argsObj);
-  const card = document.createElement("div");
-  card.className = "tool-card";
-  card.innerHTML = `
-    <div class="tc-head">
-      <span class="tc-icon">⏺</span>
-      <span class="tc-name">${escapeHtml(name)}</span>
-      ${summary ? `<span class="tc-arg">${escapeHtml(summary)}</span>` : ""}
-      <span class="status">running…</span>
-    </div>
-    <div class="tc-confirm hidden"></div>
-    <button type="button" class="tc-toggle hidden" aria-expanded="false"></button>
-    <pre class="body hidden"></pre>
-  `;
-  chatHistory.appendChild(card);
-  scrollToBottom();
-
-  const toggle = card.querySelector(".tc-toggle") as HTMLButtonElement;
-  const body = card.querySelector(".body") as HTMLElement;
-  toggle.addEventListener("click", () => {
-    const expanded = toggle.getAttribute("aria-expanded") === "true";
-    toggle.setAttribute("aria-expanded", String(!expanded));
-    body.classList.toggle("hidden", expanded);
-    toggle.textContent = toggle.textContent.replace(expanded ? "collapse" : "expand", expanded ? "expand" : "collapse");
-  });
-  return card;
+  addToolLine("call", "→", `${name}${summary ? `(${summary})` : ""}…`);
 }
 
-/** Merges the approve/deny UI into the same card as the tool call it belongs to, directly under
- *  the one-line header — rather than a separate card appended afterward, which pushed the buttons
- *  below whatever output/diff had already piled up by the time approval was needed. */
-function showConfirmInCard(card: HTMLDivElement, callId: string, toolName: string): void {
-  setCardStatus(card, "awaiting approval", "wait");
-  const confirmBox = card.querySelector(".tc-confirm") as HTMLElement;
-  confirmBox.innerHTML = `
-    <p class="tc-question">Allow ${escapeHtml(toolName)}?</p>
-    <div class="confirm-row">
-      <button type="button" class="approve">Approve</button>
-      <button type="button" class="deny">Deny</button>
-    </div>
-  `;
-  show(confirmBox);
-  scrollToBottom();
+function addToolResultLine(name: string, result: string, error: boolean): void {
+  addLogLine(error ? "err" : "ok", error ? "✗" : "✓", name, result || (error ? "failed" : "done"));
+}
 
+/** A single reusable popup for whichever tool is currently awaiting approval — confirmation-
+ *  requiring tools never run concurrently (see Agent.executeToolCalls), so there's always at
+ *  most one question pending and one popup is always enough. Dismissing it any way other than an
+ *  explicit choice (Escape, tapping the backdrop) counts as a deny, so the agent is never left
+ *  waiting on a decision that will never come. */
+function showConfirmModal(question: string, callId: string): void {
+  text(confirmQuestion, question);
+  let decided = false;
   const decide = (approved: boolean) => {
+    if (decided) return;
+    decided = true;
     connection?.send({ type: "tool_decision", callId, approved });
-    setCardStatus(card, approved ? "approved" : "denied", approved ? "ok" : "err");
-    confirmBox.innerHTML = "";
-    hide(confirmBox);
+    addToolLine(approved ? "ok" : "err", approved ? "✓" : "✗", approved ? "Approved" : "Denied");
   };
-  card.querySelector(".approve")?.addEventListener("click", () => decide(true));
-  card.querySelector(".deny")?.addEventListener("click", () => decide(false));
+  const onApprove = () => {
+    decide(true);
+    confirmModal.close();
+  };
+  const onDeny = () => {
+    decide(false);
+    confirmModal.close();
+  };
+  confirmApproveBtn.addEventListener("click", onApprove, { once: true });
+  confirmDenyBtn.addEventListener("click", onDeny, { once: true });
+  confirmModal.addEventListener("close", () => decide(false), { once: true });
+  confirmModal.showModal();
 }
 
 function scrollToBottom(): void {
@@ -611,6 +606,9 @@ function init(): void {
   promptPresetSelect.addEventListener("change", updatePromptPresetHint);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();
+  });
+  confirmModal.addEventListener("click", (e) => {
+    if (e.target === confirmModal) confirmModal.close();
   });
 
   changeRepoBtn.addEventListener("click", backToRepoPicker);
