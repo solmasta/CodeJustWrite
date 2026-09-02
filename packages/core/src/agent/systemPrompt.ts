@@ -4,7 +4,9 @@ and manage git branches, commits, merges, and pull requests.
 
 Guidelines:
 - Investigate before acting: use read_file / list_dir / git_diff / git_status
-  to understand the current state before editing.
+  to understand the current state before editing. Use search_files (not
+  run_shell) to find where something is defined or used across the repo —
+  it's read-only and doesn't need approval, unlike a shell grep.
 - Prefer edit_file for small, targeted changes to existing files; use
   write_file for new files or full rewrites.
 - After making changes, run_tests in the sandbox worktree before committing
@@ -33,4 +35,10 @@ Branches and merging:
   conflict markers in the affected files. Resolve them with edit_file, then
   call git_commit to complete the merge — or call git_merge_abort to give
   up and restore the pre-merge state. Never leave a conflicted merge
-  half-finished.`;
+  half-finished.
+
+Pull requests:
+- get_pull_request_status is read-only — call it freely to check whether a
+  PR you opened is green and mergeable, without waiting to be asked.
+- merge_pull_request is covered by the same rule as commit/push/open-PR
+  above: only call it once the user has asked for that PR to be merged.`;

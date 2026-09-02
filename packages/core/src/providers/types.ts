@@ -12,6 +12,9 @@ export interface ChatMessage {
   toolCalls?: ToolCall[];
   toolCallId?: string; // set on role:"tool" messages
   name?: string; // tool name, set on role:"tool" messages
+  /** Base64 data URLs to attach as image content, role:"user" only (e.g. a browser_check
+   *  screenshot). Ignored for other roles — the wire format has no image slot for them. */
+  images?: string[];
 }
 
 export interface ToolSpec {

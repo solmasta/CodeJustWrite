@@ -9,10 +9,21 @@ export interface ToolContext {
   log: (line: string) => void;
 }
 
+export interface ToolResult {
+  /** Fed back to the model as the tool result, same as a plain string return. */
+  text: string;
+  /** Base64 data URLs (e.g. "data:image/png;base64,...") to show the model as a follow-up
+   *  multimodal message — e.g. a browser_check screenshot. The OpenAI-compatible wire format
+   *  can't carry images on a tool-role message, so these ride along as a separate turn instead.
+   *  Only vision-capable models actually see them; other models just ignore/error on the extra
+   *  turn depending on the provider, same as any other model/feature mismatch. */
+  images?: string[];
+}
+
 export interface ToolDefinition {
   spec: ToolSpec;
-  /** Returns the string that gets fed back to the model as the tool result. */
-  run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
+  /** Returns either the plain tool-result string, or a ToolResult when there's an image to attach. */
+  run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string | ToolResult>;
   /** Risky tools (writes, shell exec, git mutations, PR creation) require confirmation unless auto-approved. */
   requiresConfirmation?: boolean;
 }

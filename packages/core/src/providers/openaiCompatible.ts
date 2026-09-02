@@ -9,7 +9,7 @@ import type {
   ToolSpec,
 } from "./types.js";
 
-function toOpenAIMessages(messages: ChatMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+export function toOpenAIMessages(messages: ChatMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   return messages.map((m) => {
     if (m.role === "tool") {
       return {
@@ -28,6 +28,12 @@ function toOpenAIMessages(messages: ChatMessage[]): OpenAI.Chat.Completions.Chat
           function: { name: tc.name, arguments: tc.arguments },
         })),
       };
+    }
+    if (m.role === "user" && m.images?.length) {
+      const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+      if (m.content) parts.push({ type: "text", text: m.content });
+      for (const dataUrl of m.images) parts.push({ type: "image_url", image_url: { url: dataUrl } });
+      return { role: "user", content: parts };
     }
     return { role: m.role as "system" | "user", content: m.content ?? "" };
   });

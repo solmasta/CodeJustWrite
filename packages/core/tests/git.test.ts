@@ -5,6 +5,9 @@ import { execSandboxed } from "../src/sandbox/exec.js";
 import {
   gitStatusTool,
   gitDiffTool,
+  gitLogTool,
+  gitStashTool,
+  gitStashPopTool,
   gitCommitTool,
   gitCreateBranchTool,
   gitFetchTool,
@@ -98,6 +101,26 @@ describe("git tools", () => {
 
     const cleanDiff = await gitDiffTool.run({}, ctx);
     expect(cleanDiff).toBe("(no changes)");
+  });
+
+  it("git_log shows recent commit history", async () => {
+    const ctx = makeCtx(repo);
+    const log = await gitLogTool.run({}, ctx);
+    expect(log).toContain("init");
+  });
+
+  it("git_stash then git_stash_pop round-trips uncommitted changes", async () => {
+    const ctx = makeCtx(repo);
+    await fs.writeFile(path.join(repo, "README.md"), "stashed change\n");
+
+    const stashOutput = await gitStashTool.run({ message: "wip" }, ctx);
+    expect(stashOutput).not.toBe("");
+    expect(await gitDiffTool.run({}, ctx)).toBe("(no changes)");
+
+    const popOutput = await gitStashPopTool.run({}, ctx);
+    expect(popOutput).not.toBe("");
+    const diff = await gitDiffTool.run({}, ctx);
+    expect(diff).toContain("+stashed change");
   });
 
   it("git_create_branch switches to a new branch", async () => {
