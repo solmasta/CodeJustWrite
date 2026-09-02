@@ -1,4 +1,5 @@
 import "./style.css";
+import type { ServerMessage, Settings } from "./types.js";
 import type { ServerMessage, Settings, PromptPreset, HistoryEntry } from "./types.js";
 import {
   loadSettings,
@@ -6,6 +7,10 @@ import {
   loadActiveSession,
   saveActiveSession,
   clearActiveSession,
+  loadTranscript,
+  appendTranscript,
+  updateLastTranscriptEntry,
+  clearTranscript,
   loadDraft,
   saveDraft,
   clearDraft,
@@ -66,6 +71,7 @@ let connection: ReturnType<typeof createConnection> | null = null;
 let currentAssistantBubble: HTMLDivElement | null = null;
 let settings: Settings = loadSettings();
 let isProcessing = false;
+let currentSessionId: string | null = null;
 let promptPresets: PromptPreset[] = [];
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let livenessTimer: ReturnType<typeof setTimeout> | null = null;
@@ -234,6 +240,8 @@ function backToRepoPicker(): void {
   void endSession();
   connection?.close();
   connection = null;
+  if (currentSessionId) clearTranscript(currentSessionId);
+  currentSessionId = null;
   clearActiveSession();
   cancelDraftSave();
   clearDraft();
@@ -245,6 +253,7 @@ function backToRepoPicker(): void {
 
 function connectWebSocket(sessionId: string): void {
   connection?.close();
+  currentSessionId = sessionId;
 
   connection = createConnection(sessionId, settings, (status) => {
     if (status === "failed") {
@@ -371,8 +380,14 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "assistant_delta": {
+      const isNewBubble = !currentAssistantBubble;
       if (!currentAssistantBubble) currentAssistantBubble = addBubble("assistant", "");
       currentAssistantBubble.textContent += String(msg.text ?? "");
+      const fullText = currentAssistantBubble.textContent ?? "";
+      if (currentSessionId) {
+        if (isNewBubble) appendTranscript(currentSessionId, { kind: "assistant", text: fullText });
+        else updateLastTranscriptEntry(currentSessionId, (e) => (e.kind === "assistant" ? { ...e, text: fullText } : e));
+      }
       scrollToBottom();
       break;
     }
@@ -383,11 +398,47 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "tool_call": {
+      lastToolCard = addToolCard(String(msg.name), msg.args);
+      if (currentSessionId) appendTranscript(currentSessionId, { kind: "tool", name: String(msg.name), args: msg.args });
       addToolCallLine(String(msg.name), msg.args);
       typingIndicator.classList.remove("hidden");
       break;
     }
     case "tool_result": {
+      const card = lastToolCard;
+      if (card) {
+        const status = card.querySelector(".status");
+        const body = card.querySelector(".body");
+        if (status) {
+          status.textContent = msg.error ? "error" : "done";
+          status.className = `status ${msg.error ? "err" : "ok"}`;
+        }
+        if (body) body.textContent += `\n\n${String(msg.result ?? "")}`;
+      }
+      if (currentSessionId) {
+        updateLastTranscriptEntry(currentSessionId, (e) =>
+          e.kind === "tool" ? { ...e, result: String(msg.result ?? ""), error: Boolean(msg.error) } : e
+        );
+      }
+      break;
+    }
+    case "diff": {
+      if (lastToolCard) {
+        const body = lastToolCard.querySelector(".body");
+        if (body) body.textContent += `\n\n${String(msg.text ?? "")}`;
+      }
+      if (currentSessionId) {
+        updateLastTranscriptEntry(currentSessionId, (e) =>
+          e.kind === "tool" ? { ...e, result: `${e.result ?? ""}\n\n${String(msg.text ?? "")}` } : e
+        );
+      }
+      break;
+    }
+    case "awaiting_confirmation": {
+      const callId = String(msg.callId);
+      const question = String(msg.question ?? "Allow this action?");
+      addConfirmCard(callId, question);
+      if (currentSessionId) appendTranscript(currentSessionId, { kind: "confirm", callId, question });
       addToolResultLine(String(msg.name ?? ""), String(msg.result ?? ""), !!msg.error);
       break;
     }
@@ -413,7 +464,9 @@ function handleServerMessage(msg: ServerMessage): void {
           : '<option value="">(no models available)</option>';
         modelsRequestedFor = null;
       }
-      addBubble("system", `Error: ${String(msg.message ?? "Unknown error")}`);
+      const errorText = `Error: ${String(msg.message ?? "Unknown error")}`;
+      addBubble("system", errorText);
+      if (currentSessionId) appendTranscript(currentSessionId, { kind: "system", text: errorText });
       typingIndicator.classList.add("hidden");
       isProcessing = false;
       break;
@@ -591,6 +644,13 @@ function showConfirmModal(question: string, callId: string): void {
     if (decided) return;
     decided = true;
     connection?.send({ type: "tool_decision", callId, approved });
+    status.textContent = approved ? "approved" : "denied";
+    row.remove();
+    if (currentSessionId) {
+      updateLastTranscriptEntry(currentSessionId, (e) =>
+        e.kind === "confirm" && e.callId === callId ? { ...e, decided: approved ? "approved" : "denied" } : e
+      );
+    }
     addToolLine(approved ? "ok" : "err", approved ? "✓" : "✗", approved ? "Approved" : "Denied");
   };
   const onApprove = () => {
@@ -616,12 +676,51 @@ function sendChat(): void {
   const message = chatInput.value.trim();
   if (!message) return;
   addBubble("user", message);
+  if (currentSessionId) appendTranscript(currentSessionId, { kind: "user", text: message });
   chatInput.value = "";
   cancelDraftSave();
   clearDraft();
   typingIndicator.classList.remove("hidden");
   isProcessing = true;
   connection?.send({ type: "user_message", text: message });
+}
+
+/** Recreates the visible chat from a session's persisted transcript — used on load, before the
+ *  WebSocket (re)connects, so a page refresh restores what was on screen instead of a blank chat. */
+function replayTranscript(sessionId: string): void {
+  for (const entry of loadTranscript(sessionId)) {
+    switch (entry.kind) {
+      case "user":
+      case "assistant":
+      case "system":
+        addBubble(entry.kind, entry.text);
+        break;
+      case "tool": {
+        const card = addToolCard(entry.name, entry.args);
+        if (entry.result !== undefined) {
+          const status = card.querySelector(".status");
+          const body = card.querySelector(".body");
+          if (status) {
+            status.textContent = entry.error ? "error" : "done";
+            status.className = `status ${entry.error ? "err" : "ok"}`;
+          }
+          if (body) body.textContent += `\n\n${entry.result}`;
+        }
+        break;
+      }
+      case "confirm": {
+        if (entry.decided) {
+          // Already resolved before the refresh — a plain note, not a reconstructed
+          // interactive card: nothing is actually left to decide, and re-wiring a stale
+          // callId to fresh approve/deny buttons would be misleading.
+          addBubble("system", `${entry.decided === "approved" ? "✓ Approved" : "✗ Denied"}: ${entry.question}`);
+        } else {
+          addConfirmCard(entry.callId, entry.question);
+        }
+        break;
+      }
+    }
+  }
 }
 
 // --- Settings Modal ---
@@ -712,6 +811,7 @@ function init(): void {
     hide(signInSection);
     hide(repoSection);
     repoSub.textContent = active.repoName;
+    replayTranscript(active.sessionId);
     chatInput.value = loadDraft();
     connectWebSocket(active.sessionId);
   } else if (settings.token) {
@@ -778,6 +878,8 @@ function init(): void {
     void endSession();
     connection?.close();
     connection = null;
+    if (currentSessionId) clearTranscript(currentSessionId);
+    currentSessionId = null;
     clearActiveSession();
     cancelDraftSave();
     clearDraft();

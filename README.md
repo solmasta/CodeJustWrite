@@ -161,6 +161,15 @@ repos are still shared across tabs — only the active session is per-tab.
 Use **Settings (⚙) → Change Repository** to leave the current session and
 pick a different one without signing out.
 
+**Surviving a refresh**: the visible chat is also mirrored into that same
+tab-scoped `sessionStorage` as it happens, so reloading the page (or the OS
+reclaiming and relaunching the installed app) restores everything on screen
+instantly, before the WebSocket even reconnects — you're not left staring at
+a blank chat while it catches up. This only covers what's rendered in the
+tab; it doesn't make the *session itself* durable — the underlying agent
+conversation and the per-session repo clone still live in server memory and
+are lost if the server process restarts (a redeploy, a crash) or the session
+hits `CJW_SESSION_TTL_MIN`/idle timeout, same as before.
 ### Backing up conversations to Google Drive
 
 Tap the 💾 button in the topbar to save the current conversation to Google
