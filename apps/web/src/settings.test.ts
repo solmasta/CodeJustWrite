@@ -18,6 +18,8 @@ describe("settings", () => {
       expect(settings.token).toBe("");
       expect(settings.provider).toBe("deepinfra");
       expect(settings.recentRepos).toEqual([]);
+      expect(settings.promptPreset).toBe("default");
+      expect(settings.customInstructions).toBe("");
     });
 
     it("loads settings from localStorage", () => {

@@ -6,14 +6,20 @@ import type { ToolContext, ToolDefinition } from "../src/agent/tools/types.js";
 class ScriptedProvider implements LLMProvider {
   readonly name = "scripted";
   calls = 0;
+  receivedMessages: ChatMessage[][] = [];
   constructor(private readonly responses: CompletionResult[]) {}
 
   async complete(
-    _messages: ChatMessage[],
+    messages: ChatMessage[],
     _tools: ToolSpec[],
     _model: string,
     _handlers?: StreamHandlers
   ): Promise<CompletionResult> {
+    // Snapshot the array shape at call time — `messages` is the Agent's own history array
+    // passed by reference, and setSystemPrompt() replaces (not mutates) history[0], so a
+    // shallow copy here is enough to keep each call's system message from appearing to
+    // retroactively change once a later setSystemPrompt() call replaces that slot.
+    this.receivedMessages.push([...messages]);
     const response = this.responses[this.calls];
     this.calls++;
     if (!response) throw new Error("ScriptedProvider ran out of scripted responses");
@@ -169,5 +175,47 @@ describe("Agent showing a tool's image result to the model", () => {
     const history = agent.getHistory();
     const toolIndex = history.findIndex((m) => m.role === "tool");
     expect(history[toolIndex + 1]?.role).not.toBe("user");
+  });
+});
+
+describe("Agent.setSystemPrompt", () => {
+  it("takes effect on the next send() without discarding the conversation so far", async () => {
+    const provider = new ScriptedProvider([
+      { message: { role: "assistant", content: "First reply." }, finishReason: "stop" },
+      { message: { role: "assistant", content: "Second reply." }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [],
+      systemPrompt: "Initial prompt.",
+    });
+
+    await agent.send("hello");
+    agent.setSystemPrompt("Updated prompt.");
+    await agent.send("still here?");
+
+    expect(provider.receivedMessages[0][0]).toEqual({ role: "system", content: "Initial prompt." });
+    expect(provider.receivedMessages[1][0]).toEqual({ role: "system", content: "Updated prompt." });
+    // The user/assistant turns from before the switch are still in history, not wiped out.
+    expect(provider.receivedMessages[1].some((m) => m.role === "user" && m.content === "hello")).toBe(true);
+    expect(provider.receivedMessages[1].some((m) => m.content === "First reply.")).toBe(true);
+  });
+
+  it("reset() keeps whichever system prompt is currently set, not the original default", async () => {
+    const provider = new ScriptedProvider([{ message: { role: "assistant", content: "ok" }, finishReason: "stop" }]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "test-model",
+      ctx: makeCtx(),
+      tools: [],
+      systemPrompt: "Initial prompt.",
+    });
+
+    agent.setSystemPrompt("Updated prompt.");
+    agent.reset();
+
+    expect(agent.getHistory()).toEqual([{ role: "system", content: "Updated prompt." }]);
   });
 });

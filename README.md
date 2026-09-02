@@ -52,6 +52,8 @@ Or pick a provider/model at launch: `cjw --provider deepinfra --model moonshotai
 /provider <name>     Switch LLM provider: deepinfra | openrouter
 /models [filter]     List models available from the current provider (live), e.g. /models claude
 /model <name>         Switch model for the current provider
+/mode [preset]         Show or switch prompt style: default | tdd | explain | terse | security
+/instructions [text]   Set (or, with no text, clear) custom instructions added to every reply
 /mcp                  Show connected MCP servers and their tools
 /diff                 Show git diff of the working tree
 /status               Show git status
@@ -75,6 +77,27 @@ Claude models under `anthropic/...` IDs alongside its other models — run
 see exactly which ones your OpenRouter account currently has access to, and
 `/model <id>` to switch to one. Pricing and availability are set by
 OpenRouter, not by this project.
+
+### Prompt style and custom instructions
+
+Beyond provider/model, you can switch how the agent *behaves* on the fly —
+no restart needed, and it takes effect on the next reply without losing the
+conversation so far:
+
+- **Prompt style** — a small set of presets layered on top of the base
+  system prompt (never replacing it, so the core safety rules like "don't
+  push/merge without being asked" always still apply): `default`,
+  `tdd` (write a failing test first), `explain` (narrate reasoning as it
+  works), `terse` (minimal prose), `security` (extra scrutiny for
+  injection/auth/secrets in every change).
+- **Custom instructions** — free-text guidance of your own, appended after
+  whichever preset is active (e.g. "always use tabs", "prefer functional
+  components").
+
+CLI: `/mode` (no argument) lists the presets and shows the current one,
+`/mode tdd` switches; `/instructions <text>` sets custom instructions,
+`/instructions` with nothing clears them. PWA: both live in **Settings (⚙)**
+as a "Prompt style" dropdown and a "Custom instructions" text box.
 
 ## Quick start: phone PWA
 

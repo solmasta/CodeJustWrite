@@ -14,18 +14,24 @@ export interface AgentDeps {
   /** Defaults to the built-in tool set (git/shell/tests/browser/PR). Pass a superset — e.g.
    *  [...allTools, ...mcpTools] — to add tools from connected MCP servers. */
   tools?: ToolDefinition[];
+  /** Defaults to the base SYSTEM_PROMPT. Pass buildSystemPrompt(presetId, customInstructions)
+   *  to start with a prompt mode/custom instructions already applied. */
+  systemPrompt?: string;
   onTextDelta?: (delta: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string, error: boolean) => void;
 }
 
 export class Agent {
-  private history: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  private systemPrompt: string;
+  private history: ChatMessage[];
   private readonly tools: ToolDefinition[];
   private readonly toolsByName: Map<string, ToolDefinition>;
   private readonly toolNames: Set<string>;
 
   constructor(private deps: AgentDeps) {
+    this.systemPrompt = deps.systemPrompt ?? SYSTEM_PROMPT;
+    this.history = [{ role: "system", content: this.systemPrompt }];
     this.tools = deps.tools ?? allTools;
     this.toolsByName = new Map(this.tools.map((t) => [t.spec.name, t]));
     this.toolNames = new Set(this.toolsByName.keys());
@@ -35,8 +41,20 @@ export class Agent {
     return this.history;
   }
 
+  /** Changes the system prompt in place — takes effect on the next send(), without discarding
+   *  the conversation so far (unlike reset()). Use this for switching prompt mode/custom
+   *  instructions mid-session. */
+  setSystemPrompt(prompt: string): void {
+    this.systemPrompt = prompt;
+    if (this.history[0]?.role === "system") {
+      this.history[0] = { role: "system", content: prompt };
+    } else {
+      this.history.unshift({ role: "system", content: prompt });
+    }
+  }
+
   reset(): void {
-    this.history = [{ role: "system", content: SYSTEM_PROMPT }];
+    this.history = [{ role: "system", content: this.systemPrompt }];
   }
 
   async send(userMessage: string): Promise<string> {

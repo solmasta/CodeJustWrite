@@ -42,3 +42,77 @@ Pull requests:
   PR you opened is green and mergeable, without waiting to be asked.
 - merge_pull_request is covered by the same rule as commit/push/open-PR
   above: only call it once the user has asked for that PR to be merged.`;
+
+export interface PromptPreset {
+  id: string;
+  label: string;
+  description: string;
+  /** Appended after SYSTEM_PROMPT — never replaces it, so the core safety rules above (never
+   *  commit/merge/push without being asked, etc.) always still apply regardless of preset. */
+  instructions: string;
+}
+
+export const DEFAULT_PROMPT_PRESET_ID = "default";
+
+export const PROMPT_PRESETS: PromptPreset[] = [
+  {
+    id: "default",
+    label: "Default",
+    description: "Balanced, general-purpose coding.",
+    instructions: "",
+  },
+  {
+    id: "tdd",
+    label: "Test-Driven",
+    description: "Writes a failing test before implementing, then makes it pass.",
+    instructions:
+      "Mode: Test-Driven. Before implementing a behavior change, write or update a test that " +
+      "captures it and run_tests to confirm it actually fails for the right reason — not a typo " +
+      "or setup error. Then write the minimum code to make it pass, and run_tests again to " +
+      "confirm. Don't skip the failing-first step even for a change that looks small.",
+  },
+  {
+    id: "explain",
+    label: "Explain as you go",
+    description: "Narrates reasoning and tradeoffs while working, not just a final summary.",
+    instructions:
+      "Mode: Explain as you go. Before each non-trivial tool call, say a short sentence on why " +
+      "you're doing it and what you expect to find or change. When there's a real tradeoff " +
+      "(e.g. which approach, what to name something, whether to add a dependency), say what you " +
+      "chose and why in one sentence rather than silently picking one.",
+  },
+  {
+    id: "terse",
+    label: "Terse & Fast",
+    description: "Minimal prose — just the diffs and a one-line summary.",
+    instructions:
+      "Mode: Terse & Fast. Skip preamble and restating the request. No more than one or two " +
+      "sentences of prose per turn outside of tool calls — let diffs and tool output speak for " +
+      "themselves. Don't ask clarifying questions unless genuinely blocked; make the reasonable " +
+      "call and proceed.",
+  },
+  {
+    id: "security",
+    label: "Security Review",
+    description: "Extra scrutiny for injection, auth, and secrets handling in every change.",
+    instructions:
+      "Mode: Security Review. For every change, explicitly check for: injection (SQL/command/" +
+      "shell/template), unsafe deserialization, auth/authorization bypasses, secrets or " +
+      "credentials in code or logs, and unvalidated user input reaching a sensitive sink (file " +
+      "paths, URLs, shell commands). Call out anything you find even if the user didn't ask, and " +
+      "prefer the safer implementation whenever there's a choice.",
+  },
+];
+
+/** Builds the actual system prompt sent to the model: the fixed base prompt, plus whichever
+ *  preset's additive instructions, plus any free-text instructions the user typed themselves.
+ *  An unknown presetId falls back to "default" rather than throwing — a stale/removed preset id
+ *  saved from a previous session shouldn't break the agent. */
+export function buildSystemPrompt(presetId?: string, customInstructions?: string): string {
+  const preset = PROMPT_PRESETS.find((p) => p.id === presetId) ?? PROMPT_PRESETS[0];
+  const parts = [SYSTEM_PROMPT];
+  if (preset.instructions) parts.push(preset.instructions);
+  const custom = customInstructions?.trim();
+  if (custom) parts.push(`Additional instructions from the user for this session:\n${custom}`);
+  return parts.join("\n\n");
+}
