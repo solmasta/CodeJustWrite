@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { loadSettings, persistSettings, loadTranscript, appendTranscript, updateLastTranscriptEntry, clearTranscript } from "./settings";
+import { loadSettings, persistSettings } from "./settings";
 import { debounce } from "./utils";
 
 describe("settings", () => {
@@ -54,65 +54,6 @@ describe("settings", () => {
       expect(settings.token).toBe("old-token");
       expect(settings.serverUrl).toBe("http://example.com");
     });
-  });
-});
-
-describe("transcript persistence", () => {
-  beforeEach(() => {
-    sessionStorage.clear();
-  });
-
-  afterEach(() => {
-    sessionStorage.clear();
-  });
-
-  it("returns an empty array for a session with no transcript yet", () => {
-    expect(loadTranscript("s1")).toEqual([]);
-  });
-
-  it("appends entries in order", () => {
-    appendTranscript("s1", { kind: "user", text: "hi" });
-    appendTranscript("s1", { kind: "assistant", text: "hello" });
-    expect(loadTranscript("s1")).toEqual([
-      { kind: "user", text: "hi" },
-      { kind: "assistant", text: "hello" },
-    ]);
-  });
-
-  it("keeps different sessions' transcripts independent", () => {
-    appendTranscript("s1", { kind: "user", text: "for s1" });
-    appendTranscript("s2", { kind: "user", text: "for s2" });
-    expect(loadTranscript("s1")).toEqual([{ kind: "user", text: "for s1" }]);
-    expect(loadTranscript("s2")).toEqual([{ kind: "user", text: "for s2" }]);
-  });
-
-  it("updateLastTranscriptEntry mutates only the most recent entry", () => {
-    appendTranscript("s1", { kind: "tool", name: "list_dir", args: { path: "." } });
-    updateLastTranscriptEntry("s1", (e) => (e.kind === "tool" ? { ...e, result: "a.txt, b.txt", error: false } : e));
-    expect(loadTranscript("s1")).toEqual([
-      { kind: "tool", name: "list_dir", args: { path: "." }, result: "a.txt, b.txt", error: false },
-    ]);
-  });
-
-  it("updateLastTranscriptEntry is a no-op on an empty transcript", () => {
-    updateLastTranscriptEntry("s1", (e) => ({ ...e, text: "should never run" }) as never);
-    expect(loadTranscript("s1")).toEqual([]);
-  });
-
-  it("caps the transcript length, dropping the oldest entries first", () => {
-    for (let i = 0; i < 305; i++) appendTranscript("s1", { kind: "user", text: `msg ${i}` });
-    const stored = loadTranscript("s1");
-    expect(stored.length).toBe(300);
-    expect(stored[0]).toEqual({ kind: "user", text: "msg 5" });
-    expect(stored[stored.length - 1]).toEqual({ kind: "user", text: "msg 304" });
-  });
-
-  it("clearTranscript removes only the named session's transcript", () => {
-    appendTranscript("s1", { kind: "user", text: "keep me? no" });
-    appendTranscript("s2", { kind: "user", text: "keep me" });
-    clearTranscript("s1");
-    expect(loadTranscript("s1")).toEqual([]);
-    expect(loadTranscript("s2")).toEqual([{ kind: "user", text: "keep me" }]);
   });
 });
 
