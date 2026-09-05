@@ -69,6 +69,23 @@ export class TranscriptRecorder {
   }
 }
 
+/** A diff entry's text is always a unified diff from patchDiff (see apps/core's fs.ts tools) —
+ *  its first line is always "Index: <file>", a header that just repeats the path already shown
+ *  on the preceding tool_call line, never actual change content. Count +/- lines instead so the
+ *  export shows something that reflects the size of the change. */
+function summarizeDiffStat(diffText: string): string {
+  let added = 0;
+  let removed = 0;
+  for (const line of diffText.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) added++;
+    else if (line.startsWith("-")) removed++;
+  }
+  return `+${added} −${removed} lines changed`;
+}
+
+// Keep in sync with apps/web/src/main.ts's primaryArgSummary — same preferredKeys/truncation,
+// duplicated because the client bundle has no runtime dependency on server code (or vice versa).
 function summarizeArgs(args: Record<string, unknown> | undefined): string {
   if (!args) return "";
   const preferredKeys = ["path", "pattern", "command", "url", "branch", "title", "message", "script", "pullNumber"];
@@ -118,7 +135,7 @@ export function renderTranscriptMarkdown(entries: TranscriptEntry[], repoName: s
         break;
       }
       case "diff":
-        lines.push(`> ${(entry.text ?? "").split("\n")[0]}`, "");
+        lines.push(`> ${summarizeDiffStat(entry.text ?? "")}`, "");
         break;
     }
   }
