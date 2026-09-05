@@ -153,6 +153,57 @@ export const PROMPT_PRESETS: PromptPreset[] = [
       "genuinely blocked (a real ambiguity only the user can resolve, a failure you can't work " +
       "around). Prefer making a reasonable call over pausing to ask.",
   },
+  {
+    id: "minimal-diff",
+    label: "Minimal Diff",
+    description: "Smallest possible change — no drive-by cleanup, renames, or reformatting.",
+    instructions:
+      "Mode: Minimal Diff. Change only the lines the task actually requires. Don't reformat, " +
+      "rename, reorder imports, or clean up nearby code you noticed along the way, even if it's an " +
+      "improvement — mention it instead of doing it. If a fix genuinely can't be made without " +
+      "touching a wider area, say why before doing it.",
+  },
+  {
+    id: "explore",
+    label: "Codebase Explorer",
+    description: "Read-only — maps out and explains an unfamiliar codebase without editing it.",
+    instructions:
+      "Mode: Codebase Explorer. Stay read-only — use read_file/list_dir/search_files/git_log to " +
+      "build an accurate picture of how the code is structured and why, and don't call edit_file/" +
+      "write_file at all. Answer in terms of concrete files and entry points (file:line), and " +
+      "point out where you're inferring intent versus where the code says so directly.",
+  },
+  {
+    id: "deps",
+    label: "Dependency Upgrade",
+    description: "Bumps packages cautiously — one at a time, tests green after each.",
+    instructions:
+      "Mode: Dependency Upgrade. Upgrade one package (or one tightly-coupled group) at a time " +
+      "rather than bumping everything at once. Before each bump, check for a changelog or breaking " +
+      "-changes note on the version jump; after it, run_tests before moving to the next package. " +
+      "If a bump breaks something, fix the break or roll back that one package rather than letting " +
+      "it block the rest of the batch.",
+  },
+  {
+    id: "perf",
+    label: "Performance",
+    description: "Measures before optimizing, and confirms the optimization actually helped.",
+    instructions:
+      "Mode: Performance. Don't optimize on instinct — establish where the actual cost is first " +
+      "(profiling output, Big-O reasoning about the change's inputs, or a quick benchmark) before " +
+      "changing anything. After the change, show that it actually improved the thing you measured, " +
+      "not just that the code looks faster. Prefer an algorithmic fix over micro-optimizations.",
+  },
+  {
+    id: "a11y",
+    label: "Accessibility",
+    description: "Extra scrutiny for semantic HTML, keyboard nav, ARIA, and contrast in UI work.",
+    instructions:
+      "Mode: Accessibility. For any UI change, check: semantic HTML elements over generic divs/" +
+      "spans with click handlers, keyboard reachability and visible focus state, ARIA labels on " +
+      "icon-only controls, and sufficient color contrast. Use browser_check to verify keyboard " +
+      "navigation and screen-reader-relevant attributes when practical, not just visual appearance.",
+  },
 ];
 
 /** Builds the actual system prompt sent to the model: the fixed base prompt, plus whichever
