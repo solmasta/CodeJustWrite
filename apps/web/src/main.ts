@@ -36,6 +36,7 @@ const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
+const exportBtn = el<HTMLButtonElement>("#exportBtn");
 
 const confirmModal = el<HTMLDialogElement>("#confirmModal");
 const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
@@ -267,6 +268,39 @@ function connectWebSocket(sessionId: string): void {
   });
 
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
+}
+
+/** Saves the current conversation as a Markdown file directly on this device — no account, no
+ *  third-party service, nothing left on the server beyond what it already keeps for the session.
+ *  Fetches the rendered transcript (already authenticated, same as any other /api call — a plain
+ *  navigation couldn't carry the bearer token) and hands the browser a Blob to save, the same way
+ *  any other "download this" button on the web works. */
+async function exportConversation(): Promise<void> {
+  const active = loadActiveSession();
+  if (!active || exportBtn.disabled) return;
+  exportBtn.disabled = true;
+  const originalLabel = exportBtn.textContent;
+  exportBtn.textContent = "⏳";
+  try {
+    const res = await apiFetch(settings, `/api/session/${active.sessionId}/export?repoName=${encodeURIComponent(active.repoName)}`);
+    if (!res.ok) throw new Error(`Export failed (HTTP ${res.status})`);
+    const markdown = await res.text();
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `codejustwrite-${active.repoName.replace(/[/\\]/g, "-")}-${stamp}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    addBubble("system", `Couldn't save conversation: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    exportBtn.disabled = false;
+    exportBtn.textContent = originalLabel;
+  }
 }
 
 /** A backgrounded mobile tab (minimized, switched away from) can have its WebSocket silently
@@ -542,7 +576,16 @@ function addToolResultLine(name: string, result: string, error: boolean): void {
  *  most one question pending and one popup is always enough. Dismissing it any way other than an
  *  explicit choice (Escape, tapping the backdrop) counts as a deny, so the agent is never left
  *  waiting on a decision that will never come. */
+// A reconnect (see the Session.attach server-side re-send of still-open confirmations, for the
+// case where backgrounding dropped the original prompt before it was answered) can deliver an
+// awaiting_confirmation for a callId already on screen — showModal() throws if called on a dialog
+// that's already open, and re-adding listeners would double-fire the next click. Track which
+// callId is currently displayed so a duplicate resend is a no-op instead of either of those.
+let currentConfirmCallId: string | null = null;
+
 function showConfirmModal(question: string, callId: string): void {
+  if (confirmModal.open && currentConfirmCallId === callId) return;
+  currentConfirmCallId = callId;
   text(confirmQuestion, question);
   let decided = false;
   const decide = (approved: boolean) => {
@@ -562,7 +605,7 @@ function showConfirmModal(question: string, callId: string): void {
   confirmApproveBtn.addEventListener("click", onApprove, { once: true });
   confirmDenyBtn.addEventListener("click", onDeny, { once: true });
   confirmModal.addEventListener("close", () => decide(false), { once: true });
-  confirmModal.showModal();
+  if (!confirmModal.open) confirmModal.showModal();
 }
 
 function scrollToBottom(): void {
@@ -708,6 +751,7 @@ function init(): void {
   });
 
   settingsBtn.addEventListener("click", openSettings);
+  exportBtn.addEventListener("click", () => void exportConversation());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);

@@ -20,17 +20,22 @@ import {
   type ToolDefinition,
 } from "@codejustwrite/core";
 import { redactSecrets, withGithubToken } from "./secrets.js";
-import { TranscriptRecorder } from "./transcript.js";
+import { TranscriptRecorder, renderTranscriptMarkdown } from "./transcript.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
+  question: string;
 }
 
 export class Session {
   readonly id = randomUUID();
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
-  autoApprove = false;
+  // Defaults on: this is a single-user tool running against the user's own repo, and a
+  // confirmation popup is exactly the thing that gets stranded by a backgrounded mobile tab
+  // (see Session.attach's resend-on-reconnect comment). Off is still one Settings toggle away
+  // for anyone who wants to review each tool call before it runs.
+  autoApprove = true;
   /** True for the duration of one agent.send() turn — a reconnecting client uses this (sent in
    *  the "state" message) to restore its "AI is thinking…" indicator instead of it silently
    *  disappearing on reload while a reply is still in flight. */
@@ -113,6 +118,15 @@ export class Session {
     if (entries.length) {
       this.send({ type: "history", entries, assistantOpen: this.transcript.assistantOpen });
     }
+    // A tool confirmation is only ever pushed once, over whatever socket happened to be attached
+    // at the moment it was requested. If the app was backgrounded (or a zombie connection dropped
+    // it silently) right then, the prompt never reached any client — but the server-side promise
+    // is still waiting, and nothing else will ever nudge it forward. Re-send every still-open one
+    // so a reconnecting client always gets a chance to answer it, instead of the turn hanging
+    // forever with busy stuck true.
+    for (const [callId, pending] of this.pendingConfirmations) {
+      this.send({ type: "awaiting_confirmation", callId, question: pending.question });
+    }
   }
 
   detach(ws: WebSocket): void {
@@ -182,13 +196,19 @@ export class Session {
     }
   }
 
+  /** Renders the conversation so far into a Markdown note for the "export/save locally"
+   *  download — see renderTranscriptMarkdown for what it does and doesn't include. */
+  buildExportMarkdown(repoName: string): string {
+    return renderTranscriptMarkdown(this.transcript.getEntries(), repoName, this.createdAt);
+  }
+
   private requestConfirmation(question: string): Promise<boolean> {
     if (this.autoApprove) return Promise.resolve(true);
 
     const callId = randomUUID();
     this.send({ type: "awaiting_confirmation", callId, question });
     return new Promise((resolve) => {
-      this.pendingConfirmations.set(callId, { resolve });
+      this.pendingConfirmations.set(callId, { resolve, question });
     });
   }
 

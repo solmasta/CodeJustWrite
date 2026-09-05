@@ -159,6 +159,20 @@ app.delete("/api/session/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// A local, no-account export: the client fetches this (already authenticated, same as any other
+// /api call) and saves the response as a file via a Blob + <a download> — no server-side storage,
+// no third-party service, the file goes straight to whatever "Downloads" means on the phone.
+app.get("/api/session/:id/export", (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+  const repoName =
+    typeof req.query.repoName === "string" && req.query.repoName.trim() ? req.query.repoName.trim() : "unknown-repo";
+  res.type("text/markdown").send(session.buildExportMarkdown(repoName));
+});
+
 // Serve the built PWA (apps/web/dist) and fall back to index.html for client-side routes.
 app.use(express.static(webDist));
 app.get(/^(?!\/api).*/, (_req, res) => {

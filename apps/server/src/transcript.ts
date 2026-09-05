@@ -68,3 +68,59 @@ export class TranscriptRecorder {
     return this.entries;
   }
 }
+
+function summarizeArgs(args: Record<string, unknown> | undefined): string {
+  if (!args) return "";
+  const preferredKeys = ["path", "pattern", "command", "url", "branch", "title", "message", "script", "pullNumber"];
+  for (const key of preferredKeys) {
+    const value = args[key];
+    if (value === undefined || value === null || value === "") continue;
+    const s = String(value);
+    return s.length > 60 ? s.slice(0, 57) + "…" : s;
+  }
+  return "";
+}
+
+/**
+ * Renders a recorded transcript into a compact, human-readable Markdown note — the user's own
+ * messages and the assistant's replies in full, but tool activity summarized to one line each (a
+ * preview of the result, not its full content) rather than dumping file contents/diffs wholesale.
+ * The point is a readable record of what was being worked on and why, not a second copy of the
+ * code itself — that's what git/GitHub is already for. Used for the "export this conversation"
+ * download (see the /api/session/:id/export route).
+ */
+export function renderTranscriptMarkdown(entries: TranscriptEntry[], repoName: string, startedAt: number): string {
+  const lines: string[] = [
+    `# CodeJustWrite conversation — ${repoName}`,
+    "",
+    `Exported: ${new Date().toISOString()}`,
+    `Session started: ${new Date(startedAt).toISOString()}`,
+    "",
+    "---",
+    "",
+  ];
+  for (const entry of entries) {
+    switch (entry.type) {
+      case "user":
+        lines.push(`**You:** ${entry.text ?? ""}`, "");
+        break;
+      case "assistant":
+        if (entry.text) lines.push(`**Assistant:** ${entry.text}`, "");
+        break;
+      case "tool_call": {
+        const summary = summarizeArgs(entry.args);
+        lines.push(`> Ran \`${entry.name}${summary ? `(${summary})` : ""}\``);
+        break;
+      }
+      case "tool_result": {
+        const preview = (entry.result ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+        lines.push(`> ${entry.error ? "✗ failed" : "✓ done"}${preview ? ` — ${preview}` : ""}`, "");
+        break;
+      }
+      case "diff":
+        lines.push(`> ${(entry.text ?? "").split("\n")[0]}`, "");
+        break;
+    }
+  }
+  return lines.join("\n");
+}

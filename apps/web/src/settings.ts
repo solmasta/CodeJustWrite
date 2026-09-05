@@ -11,7 +11,7 @@ const defaults: Settings = {
   branch: "",
   provider: "deepinfra",
   model: "moonshotai/Kimi-K3",
-  autoApprove: false,
+  autoApprove: true,
   recentRepos: [],
   promptPreset: "default",
   customInstructions: "",

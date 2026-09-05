@@ -161,6 +161,14 @@ repos are still shared across tabs — only the active session is per-tab.
 Use **Settings (⚙) → Change Repository** to leave the current session and
 pick a different one without signing out.
 
+**Saving a conversation to this device**: tap the 💾 button in the topbar
+to download a Markdown file of the current conversation — what you asked,
+what the assistant did (a one-line summary per tool call, not full file
+contents/diffs — that's what git is for), and what it said — straight to
+this device, the same way any other website's "download" button works. No
+account, no third-party service, nothing kept on the server beyond what it
+already keeps for the session.
+
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique
