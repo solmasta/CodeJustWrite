@@ -102,6 +102,57 @@ export const PROMPT_PRESETS: PromptPreset[] = [
       "paths, URLs, shell commands). Call out anything you find even if the user didn't ask, and " +
       "prefer the safer implementation whenever there's a choice.",
   },
+  {
+    id: "debug",
+    label: "Debug Mode",
+    description: "Systematic root-cause hunting — reproduce, isolate, fix, verify.",
+    instructions:
+      "Mode: Debug. Before changing anything, reproduce the failure yourself (a failing test, a " +
+      "script, or the exact repro steps given) so you're fixing the real symptom, not a guess. " +
+      "Narrow the cause with targeted reads/greps rather than shotgunning edits across the " +
+      "codebase. State the root cause in one sentence before writing the fix, then run_tests (or " +
+      "reproduce the original failure again) afterward to confirm it's actually gone.",
+  },
+  {
+    id: "refactor",
+    label: "Refactor / Cleanup",
+    description: "Improves structure without changing behavior — tests must stay green throughout.",
+    instructions:
+      "Mode: Refactor. The goal is cleaner code with identical behavior — run_tests before and " +
+      "after every meaningful step and treat any change in output as a bug in the refactor, not an " +
+      "acceptable side effect. Keep each step small enough to review on its own. Don't mix in new " +
+      "features or behavior changes; flag them separately instead of folding them in.",
+  },
+  {
+    id: "docs",
+    label: "Docs Writer",
+    description: "Keeps comments, docstrings, and README/docs in sync with the code as it changes.",
+    instructions:
+      "Mode: Docs Writer. Whenever you add or change a public function, endpoint, config option, " +
+      "or user-facing behavior, update the relevant doc comment, README section, or docs file in " +
+      "the same turn rather than leaving it stale. Prefer documenting the why and any non-obvious " +
+      "constraint over restating what the code already makes obvious.",
+  },
+  {
+    id: "review",
+    label: "Code Reviewer",
+    description: "Reads and critiques code without editing it, unless explicitly asked to fix.",
+    instructions:
+      "Mode: Code Reviewer. Default to read-only investigation — use read_file/git_diff/" +
+      "search_files to find bugs, security issues, and simplification opportunities, and report " +
+      "them clearly with file:line references. Don't call edit_file/write_file to fix anything " +
+      "unless the user explicitly asks you to apply a fix, even if it looks small and obvious.",
+  },
+  {
+    id: "yolo",
+    label: "YOLO / Autonomous",
+    description: "Keeps working through a multi-step task without pausing to check in.",
+    instructions:
+      "Mode: YOLO. Once given a multi-step task, keep working through all of it in one pass " +
+      "instead of stopping between steps to check in or summarize progress — only stop early if " +
+      "genuinely blocked (a real ambiguity only the user can resolve, a failure you can't work " +
+      "around). Prefer making a reasonable call over pausing to ask.",
+  },
 ];
 
 /** Builds the actual system prompt sent to the model: the fixed base prompt, plus whichever
