@@ -31,7 +31,11 @@ export class Session {
   readonly id = randomUUID();
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
-  autoApprove = false;
+  // Defaults on: this is a single-user tool running against the user's own repo, and a
+  // confirmation popup is exactly the thing that gets stranded by a backgrounded mobile tab
+  // (see Session.attach's resend-on-reconnect comment). Off is still one Settings toggle away
+  // for anyone who wants to review each tool call before it runs.
+  autoApprove = true;
   /** True for the duration of one agent.send() turn — a reconnecting client uses this (sent in
    *  the "state" message) to restore its "AI is thinking…" indicator instead of it silently
    *  disappearing on reload while a reply is still in flight. */
