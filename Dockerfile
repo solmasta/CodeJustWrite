@@ -59,4 +59,12 @@ RUN node node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8787
-CMD ["node", "apps/server/dist/index.js"]
+# --max-old-space-size caps V8's heap well below typical free/starter-tier container memory
+# limits (e.g. Render's 512MB) instead of letting it grow toward a much larger default based on
+# the host's total visible memory — without this, idle heap growth alone can trip the platform's
+# OOM killer over a period of hours even with zero active sessions, since V8 doesn't proactively
+# shrink the heap back down; a lower ceiling forces GC to reclaim memory sooner. Tuned to leave
+# headroom for non-heap memory (buffers, native modules, thread stacks) plus whatever a spawned
+# git/npm/pytest child process or headless Chromium instance (browser_check) needs alongside it —
+# raise this (or the container's memory limit) if deploying with more RAM available.
+CMD ["node", "--max-old-space-size=350", "apps/server/dist/index.js"]

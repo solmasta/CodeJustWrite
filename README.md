@@ -338,3 +338,9 @@ npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
   `apiKey` is only ever passed to that connector's own subprocess as an env
   var; an http connector's `apiKey` is only ever sent to that connector's own
   URL as a bearer token.
+- The server caps Node's heap at 350MB (`--max-old-space-size` in the
+  Dockerfile) to stay well under a 512MB free/starter-tier container limit —
+  without it, idle heap growth alone can trip the platform's OOM killer over
+  a period of hours, since V8 doesn't proactively shrink the heap back down.
+  Raise it (and the container's memory limit) if deploying with more RAM, or
+  if `browser_check`'s headless Chromium needs more headroom alongside it.
