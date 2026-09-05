@@ -333,6 +333,27 @@ configured on the service. An account-scoped API key has full account
 access, so only set this if you want the agent able to redeploy and change
 config on your behalf.
 
+### Cloudflare tools (optional)
+
+Set `CLOUDFLARE_API_TOKEN` (from Cloudflare's dashboard → Manage Account →
+API Tokens) and `CJW_CLOUDFLARE_ZONE_ID` to give the agent DNS/cache tools
+for a domain: `cloudflare_list_zones`, `cloudflare_get_zone`,
+`cloudflare_list_dns_records` (all read-only), and
+`cloudflare_create_dns_record` / `cloudflare_update_dns_record` /
+`cloudflare_delete_dns_record` / `cloudflare_purge_cache` (mutating,
+require approval like any other write tool). `cloudflare_list_zones` works
+without `CJW_CLOUDFLARE_ZONE_ID` set — use it to find a zone's ID, since
+every other tool needs one (as an argument, or that default).
+
+A Cloudflare API token's permissions are whatever you picked when creating
+it — often much broader than DNS (Workers, R2, Zero Trust, billing, and
+more can all be bundled into one token). This app's tool surface only ever
+calls the DNS/cache-purge endpoints above regardless of what the token
+itself is scoped to allow, but the credential is still as sensitive as its
+broadest granted permission — prefer a token scoped to just
+Zone:DNS:Edit + Zone:Zone:Read for the zone(s) you actually want the agent
+managing, if you're creating one fresh for this.
+
 ### When a model doesn't actually call tools
 
 Some models — especially smaller or older ones — don't reliably use the
@@ -390,10 +411,15 @@ npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
   Dockerfile) to stay well under a 512MB free/starter-tier container limit —
   without it, idle heap growth alone can trip the platform's OOM killer over
   a period of hours, since V8 doesn't proactively shrink the heap back down.
+  Raise it (and the container's memory limit) if deploying with more RAM, or
+  if `browser_check`'s headless Chromium needs more headroom alongside it.
 - `RENDER_API_KEY` (if set) is account-scoped, not limited to
   `CJW_RENDER_SERVICE_ID` — Render's API has no narrower key type. The
   agent's own Render tools only ever touch the configured service, but the
   key itself could reach any service on the account if a tool call somehow
   did otherwise, so treat it with the same care as `GITHUB_TOKEN`.
-  Raise it (and the container's memory limit) if deploying with more RAM, or
-  if `browser_check`'s headless Chromium needs more headroom alongside it.
+- `CLOUDFLARE_API_TOKEN` (if set) carries whatever permissions you picked
+  when creating it in Cloudflare's dashboard — often far broader than DNS.
+  The agent's own tools only ever call the DNS/cache-purge endpoints in
+  cloudflare.ts regardless, but treat the credential itself as sensitive as
+  its broadest granted permission, same as any other token here.
