@@ -245,6 +245,45 @@ body {
   color: var(--text);
 }
 
+/* Consecutive tool-call/result/diff lines between two chat messages collapse into one tappable
+   group (see getOrCreateToolGroup in main.ts) — starts collapsed, and the hidden body still
+   receives every line as it happens, so an active group just grows underneath without changing
+   its own rendered height or nudging anything else on screen. */
+.tool-group {
+  align-self: stretch;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tool-group-header {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tool-group-header:hover {
+  color: var(--text);
+}
+
+.tool-group-body {
+  padding: 0 10px 6px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tool-group.collapsed .tool-group-body {
+  display: none;
+}
+
 /* Centered confirmation popup — deliberately a single, reusable dialog rather than one embedded
    per tool card: only one tool ever awaits confirmation at a time (see Agent.executeToolCalls),
    so a single popup is always sufficient and there's nothing to correlate. */

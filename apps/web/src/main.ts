@@ -518,12 +518,60 @@ function replayHistory(entries: HistoryEntry[] | undefined, assistantOpen: boole
 }
 
 function addBubble(role: "user" | "assistant" | "system", content: string): HTMLDivElement {
+  closeToolGroup();
   const div = document.createElement("div");
   div.className = `bubble ${role}`;
   div.textContent = content;
   chatHistory.appendChild(div);
   scrollToBottom();
   return div;
+}
+
+/** Tool activity (calls/results/diffs) between two chat messages collapses into one tappable
+ *  group instead of interleaving directly into the scrolling feed — a turn with a dozen tool
+ *  calls used to bury the actual conversation under a wall of log lines, and kept nudging the
+ *  scroll position on every new line even for a reader who just wanted to follow the
+ *  conversation. Starts (and by default stays) collapsed — the hidden body still receives every
+ *  line as it happens, so an active group just grows underneath without moving anything else on
+ *  screen; expanding it shows the live feed exactly as before. A group a user manually expanded
+ *  to watch stays expanded once the turn ends, rather than snapping shut on them. */
+let currentToolGroup: HTMLDivElement | null = null;
+
+function getOrCreateToolGroup(): HTMLDivElement {
+  if (currentToolGroup) return currentToolGroup;
+  const group = document.createElement("div");
+  group.className = "tool-group collapsed";
+  group.dataset.active = "1";
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "tool-group-header";
+  const body = document.createElement("div");
+  body.className = "tool-group-body";
+  group.append(header, body);
+  header.addEventListener("click", () => {
+    group.classList.toggle("collapsed");
+    refreshToolGroupHeader(group);
+  });
+  chatHistory.appendChild(group);
+  currentToolGroup = group;
+  return group;
+}
+
+function refreshToolGroupHeader(group: HTMLDivElement): void {
+  const header = group.querySelector(".tool-group-header") as HTMLButtonElement;
+  // Count only actual invocations, not their paired result/diff lines too — otherwise one tool
+  // call (a call line, its diff line, and its result line) reads as "3 tool calls" instead of 1.
+  const count = group.querySelectorAll(".tool-line.invocation").length;
+  const caret = group.classList.contains("collapsed") ? "▸" : "▾";
+  const label = `${count} tool call${count === 1 ? "" : "s"}`;
+  header.textContent = `${caret} ${label}${group.dataset.active === "1" ? " — working…" : ""}`;
+}
+
+function closeToolGroup(): void {
+  if (!currentToolGroup) return;
+  currentToolGroup.dataset.active = "0";
+  refreshToolGroupHeader(currentToolGroup);
+  currentToolGroup = null;
 }
 
 /** Picks one argument to show inline next to the tool name, the way Claude Code's own terminal
@@ -543,11 +591,11 @@ function primaryArgSummary(args: Record<string, unknown>): string {
   return "";
 }
 
-/** Every tool_call/tool_result/diff event appends its own independent line to the chat feed and
- *  is never looked up or mutated afterward (only a line's own click-to-expand toggle touches it
- *  again) — unlike the old per-tool "card" that stayed around to be updated by a later event
- *  keyed on callId, an append-only log has no stale-reference class of bug to have in the first
- *  place: there's nothing to correlate. */
+/** Every tool_call/tool_result/diff event appends its own independent line to the current tool
+ *  group (see getOrCreateToolGroup) and is never looked up or mutated afterward (only a line's
+ *  own click-to-expand toggle touches it again) — unlike the old per-tool "card" that stayed
+ *  around to be updated by a later event keyed on callId, an append-only log has no stale-
+ *  reference class of bug to have in the first place: there's nothing to correlate. */
 function addToolLine(cls: string, icon: string, text: string): HTMLDivElement {
   const line = document.createElement("div");
   line.className = `tool-line ${cls}`;
@@ -558,7 +606,10 @@ function addToolLine(cls: string, icon: string, text: string): HTMLDivElement {
   textEl.className = "tl-text";
   textEl.textContent = text;
   line.append(iconEl, textEl);
-  chatHistory.appendChild(line);
+  const group = getOrCreateToolGroup();
+  group.dataset.active = "1";
+  group.querySelector(".tool-group-body")!.appendChild(line);
+  refreshToolGroupHeader(group);
   scrollToBottom();
   return line;
 }
@@ -592,7 +643,10 @@ function addLogLine(cls: string, icon: string, prefix: string, body: string): vo
 function addToolCallLine(name: string, args: unknown): void {
   const argsObj = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
   const summary = primaryArgSummary(argsObj);
-  addToolLine("call", "→", `${name}${summary ? `(${summary})` : ""}…`);
+  // The extra "invocation" class marks this as an actual new tool call for the group header's
+  // count (see refreshToolGroupHeader) — a diff/log line also uses the same dim "call" color
+  // class but isn't itself a distinct invocation, so it's deliberately left out of that count.
+  addToolLine("call invocation", "→", `${name}${summary ? `(${summary})` : ""}…`);
 }
 
 function addToolResultLine(name: string, result: string, error: boolean): void {
