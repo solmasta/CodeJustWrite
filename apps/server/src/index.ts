@@ -11,7 +11,6 @@ import { loadServerConfig } from "./config.js";
 import { requireAuth, checkWsToken } from "./auth.js";
 import { SessionManager } from "./session.js";
 import { listRepos } from "./github.js";
-import { buildGoogleAuthUrl, exchangeCodeForRefreshToken, getAccessToken, ensureBackupFolder, uploadBackupFile } from "./googleDrive.js";
 
 loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
@@ -95,64 +94,6 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-// Google's OAuth redirect is a plain browser navigation with no Authorization header, so these
-// two can't sit behind the blanket bearer-auth below — they're registered ahead of it (same
-// trick as /api/health above) and authenticate themselves instead: /connect requires the normal
-// CJW_AUTH_TOKEN as a query param (the only way to send it on a plain link), and /callback trusts
-// Google's echoed-back `state` to carry that same token through the round trip.
-app.get("/api/google/connect", (req, res) => {
-  if (!serverConfig.googleClientId || !serverConfig.googleClientSecret) {
-    res.status(400).send("CJW_GOOGLE_CLIENT_ID / CJW_GOOGLE_CLIENT_SECRET are not configured on this server.");
-    return;
-  }
-  const token = typeof req.query.token === "string" ? req.query.token : null;
-  if (!checkWsToken(serverConfig.authToken, token)) {
-    res.status(401).send("Unauthorized — open this link with ?token=<CJW_AUTH_TOKEN> appended.");
-    return;
-  }
-  const redirectUri = `${req.protocol}://${req.get("host")}/api/google/callback`;
-  const url = buildGoogleAuthUrl(
-    { clientId: serverConfig.googleClientId, clientSecret: serverConfig.googleClientSecret },
-    redirectUri,
-    token ?? ""
-  );
-  res.redirect(url);
-});
-
-app.get("/api/google/callback", async (req, res) => {
-  const code = typeof req.query.code === "string" ? req.query.code : null;
-  const state = typeof req.query.state === "string" ? req.query.state : null;
-  if (!checkWsToken(serverConfig.authToken, state)) {
-    res.status(401).send("Unauthorized");
-    return;
-  }
-  if (!code || !serverConfig.googleClientId || !serverConfig.googleClientSecret) {
-    res.status(400).send("Missing authorization code or Google client credentials.");
-    return;
-  }
-  try {
-    const redirectUri = `${req.protocol}://${req.get("host")}/api/google/callback`;
-    const refreshToken = await exchangeCodeForRefreshToken(
-      { clientId: serverConfig.googleClientId, clientSecret: serverConfig.googleClientSecret },
-      code,
-      redirectUri
-    );
-    console.log("[cjw-server] Google Drive connected — refresh token obtained (value not logged).");
-    res.send(
-      "<html><body style=\"font-family:sans-serif;max-width:600px;margin:40px auto;line-height:1.5;\">" +
-        "<h2>Google Drive connected</h2>" +
-        "<p>Copy this refresh token and set it as the <code>CJW_GOOGLE_REFRESH_TOKEN</code> environment " +
-        "variable on the server, then redeploy. Treat it like a password — anyone holding it can access " +
-        "this Drive account's app-created backup files.</p>" +
-        `<textarea readonly style="width:100%;height:80px;">${refreshToken}</textarea>` +
-        "<p>Once that's set, this page and link are no longer needed.</p>" +
-        "</body></html>"
-    );
-  } catch (err) {
-    res.status(502).send(`Failed to connect Google Drive: ${err instanceof Error ? err.message : String(err)}`);
-  }
-});
-
 app.use("/api", requireAuth(serverConfig.authToken));
 
 app.get("/api/auth/status", (_req, res) => {
@@ -204,35 +145,6 @@ app.post("/api/session/start", async (req, res) => {
 app.delete("/api/session/:id", async (req, res) => {
   await sessions.removeSession(req.params.id);
   res.json({ ok: true });
-});
-
-app.get("/api/google/status", (_req, res) => {
-  res.json({ configured: !!(serverConfig.googleClientId && serverConfig.googleClientSecret && serverConfig.googleRefreshToken) });
-});
-
-app.post("/api/session/:id/backup", async (req, res) => {
-  if (!serverConfig.googleClientId || !serverConfig.googleClientSecret || !serverConfig.googleRefreshToken) {
-    res.status(400).json({ error: "Google Drive isn't connected on this server yet." });
-    return;
-  }
-  const session = sessions.get(req.params.id);
-  if (!session) {
-    res.status(404).json({ error: "Session not found" });
-    return;
-  }
-  const repoName =
-    typeof req.body?.repoName === "string" && req.body.repoName.trim() ? req.body.repoName.trim() : "unknown-repo";
-  try {
-    const oauthConfig = { clientId: serverConfig.googleClientId, clientSecret: serverConfig.googleClientSecret };
-    const accessToken = await getAccessToken(oauthConfig, serverConfig.googleRefreshToken);
-    const folderId = await ensureBackupFolder(accessToken, repoName);
-    const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}.md`;
-    const markdown = session.buildBackupMarkdown(repoName);
-    const file = await uploadBackupFile(accessToken, folderId, filename, markdown);
-    res.json({ webViewLink: file.webViewLink });
-  } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
-  }
 });
 
 // Serve the built PWA (apps/web/dist) and fall back to index.html for client-side routes.

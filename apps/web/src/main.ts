@@ -36,7 +36,6 @@ const sendBtn = el<HTMLButtonElement>("#sendBtn");
 const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
-const saveToDriveBtn = el<HTMLButtonElement>("#saveToDriveBtn");
 
 const confirmModal = el<HTMLDialogElement>("#confirmModal");
 const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
@@ -268,47 +267,6 @@ function connectWebSocket(sessionId: string): void {
   });
 
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
-  void refreshSaveToDriveVisibility();
-}
-
-/** Shows the "Save to Drive" button only once the server actually has Google Drive credentials
- *  configured — the feature requires a one-time interactive setup (see /api/google/connect) that
- *  won't be done on every deploy, so the button needs to stay hidden rather than offering an
- *  action that would just fail. */
-async function refreshSaveToDriveVisibility(): Promise<void> {
-  try {
-    const res = await apiFetch(settings, "/api/google/status");
-    const data = await res.json();
-    saveToDriveBtn.classList.toggle("hidden", !data.configured);
-  } catch {
-    saveToDriveBtn.classList.add("hidden");
-  }
-}
-
-async function saveToDrive(): Promise<void> {
-  const active = loadActiveSession();
-  if (!active || saveToDriveBtn.disabled) return;
-  saveToDriveBtn.disabled = true;
-  const originalLabel = saveToDriveBtn.textContent;
-  saveToDriveBtn.textContent = "⏳";
-  try {
-    const res = await apiFetch(settings, `/api/session/${active.sessionId}/backup`, {
-      method: "POST",
-      body: JSON.stringify({ repoName: active.repoName }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Backup failed");
-    addBubble(
-      "system",
-      `Saved a backup of this conversation to Google Drive (CodeJustWrite Backups/${active.repoName}).` +
-        (data.webViewLink ? ` ${data.webViewLink}` : "")
-    );
-  } catch (e) {
-    addBubble("system", `Couldn't save to Drive: ${e instanceof Error ? e.message : String(e)}`);
-  } finally {
-    saveToDriveBtn.disabled = false;
-    saveToDriveBtn.textContent = originalLabel;
-  }
 }
 
 /** A backgrounded mobile tab (minimized, switched away from) can have its WebSocket silently
@@ -750,7 +708,6 @@ function init(): void {
   });
 
   settingsBtn.addEventListener("click", openSettings);
-  saveToDriveBtn.addEventListener("click", () => void saveToDrive());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);
