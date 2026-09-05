@@ -293,6 +293,19 @@ Set `CJW_MCP_SERVERS` to a JSON array, one entry per server:
   is skipped with a logged warning rather than breaking the rest of the
   agent's tools — check `/mcp` (CLI) or the server's startup log for status.
 
+### GitHub tools beyond PR create/merge (optional, uses the existing GITHUB_TOKEN)
+
+`GITHUB_TOKEN` (already required for PR automation, see above) also unlocks
+a broader set of tools, always via the REST API directly (no `gh` CLI
+fallback for these): `github_list_issues`, `github_create_issue`,
+`github_comment_on_issue` (works on PRs too — they're issues in GitHub's
+data model), `github_list_review_comments`, `github_post_review_comment`
+(inline, on a specific diff line), and `github_search_code` (across all of
+GitHub, not just the cloned repo). All default to the current repo (parsed
+from `origin`) unless `owner`/`repo` are passed explicitly. The read-only
+ones (`list_issues`, `list_review_comments`, `search_code`) need no
+approval; the rest require confirmation like any other write tool.
+
 ### Render tools (optional)
 
 Set `RENDER_API_KEY` (an account-scoped key from Render's dashboard → Account

@@ -14,7 +14,7 @@ import {
   gitMergeAbortTool,
   gitPushTool,
 } from "./git.js";
-import { createPullRequestTool, mergePullRequestTool, getPullRequestStatusTool } from "./github.js";
+import { createPullRequestTool, mergePullRequestTool, getPullRequestStatusTool, githubExtraTools } from "./github.js";
 import { runTestsTool } from "./tests.js";
 import { browserCheckTool } from "./playwright.js";
 import { renderTools } from "./render.js";
@@ -43,6 +43,7 @@ export const allTools: ToolDefinition[] = [
   createPullRequestTool,
   mergePullRequestTool,
   getPullRequestStatusTool,
+  ...githubExtraTools,
   runTestsTool,
   browserCheckTool,
   ...renderTools,
