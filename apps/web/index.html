@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#111827" />
+    <meta name="theme-color" content="#10141f" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="description" content="AI-powered coding assistant with secure sandbox execution" />
@@ -73,7 +73,8 @@
       <section id="chatSection" class="hidden" style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
         <div class="topbar">
           <div>
-            <h1>CodeJustWrite</h1>
+            <div class="win-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h1>CodeJustWrite<span class="cursor" aria-hidden="true">_</span></h1>
             <div class="sub" id="repoSub">No repository selected</div>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
@@ -82,17 +83,17 @@
             <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
           </div>
         </div>
-        
+
         <div id="chatHistory" class="messages"></div>
-        
+
         <div id="typingIndicator" class="hidden" style="padding: 0 14px; color: var(--text-dim); font-size: 13px;">
           <span class="loading-spinner" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 8px;"></span>
           AI is thinking...
         </div>
-        
+
         <div class="composer">
-          <textarea id="chatInput" placeholder="Ask the AI to help with your code..." rows="1"></textarea>
-          <button id="sendBtn" aria-label="Send">➜</button>
+          <textarea id="chatInput" placeholder="// ask the AI to help with your code" rows="1"></textarea>
+          <button id="sendBtn" aria-label="Send">▶</button>
         </div>
       </section>
       
