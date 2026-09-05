@@ -96,6 +96,25 @@ const rateLimitSweep = setInterval(() => {
 }, 5 * 60_000);
 rateLimitSweep.unref();
 
+// The Render free tier's 512MB limit has been hit twice now (both times with zero logged
+// requests/sessions in the run-up) despite the --max-old-space-size cap in the Dockerfile CMD,
+// which only bounds V8's old-space heap — it says nothing about RSS, "external" memory (Buffers/
+// ArrayBuffers, counted separately from the heap), or any spawned child process's own memory
+// (git/npm/a stdio MCP server), none of which process.memoryUsage() would even show as heap
+// growth. Logging the full breakdown periodically means the next occurrence comes with an actual
+// trend line instead of another guess — in particular, whether Node's own rss/external is what's
+// climbing (implicates the process itself) or stays flat while Render's own memory metric climbs
+// anyway (implicates something outside Node's accounting, e.g. a child process).
+const memoryLog = setInterval(() => {
+  const mem = process.memoryUsage();
+  const mb = (bytes: number) => Math.round((bytes / 1024 / 1024) * 10) / 10;
+  console.log(
+    `[cjw-server] memory rss=${mb(mem.rss)}MB heapUsed=${mb(mem.heapUsed)}MB heapTotal=${mb(mem.heapTotal)}MB ` +
+      `external=${mb(mem.external)}MB arrayBuffers=${mb(mem.arrayBuffers)}MB activeSessions=${sessions.size}`
+  );
+}, 5 * 60_000);
+memoryLog.unref();
+
 app.get("/api/health", (_req, res) => {
   const mem = process.memoryUsage();
   res.json({
