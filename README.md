@@ -293,6 +293,35 @@ Set `CJW_MCP_SERVERS` to a JSON array, one entry per server:
   is skipped with a logged warning rather than breaking the rest of the
   agent's tools — check `/mcp` (CLI) or the server's startup log for status.
 
+### GitHub tools beyond PR create/merge (optional, uses the existing GITHUB_TOKEN)
+
+`GITHUB_TOKEN` (already required for PR automation, see above) also unlocks
+a broader set of tools, always via the REST API directly (no `gh` CLI
+fallback for these): `github_list_issues`, `github_create_issue`,
+`github_comment_on_issue` (works on PRs too — they're issues in GitHub's
+data model), `github_list_review_comments`, `github_post_review_comment`
+(inline, on a specific diff line), and `github_search_code` (across all of
+GitHub, not just the cloned repo). All default to the current repo (parsed
+from `origin`) unless `owner`/`repo` are passed explicitly. The read-only
+ones (`list_issues`, `list_review_comments`, `search_code`) need no
+approval; the rest require confirmation like any other write tool.
+
+### Render tools (optional)
+
+Set `RENDER_API_KEY` (an account-scoped key from Render's dashboard → Account
+Settings → API Keys) and `CJW_RENDER_SERVICE_ID` to give the agent built-in
+tools for managing its own Render deployment: `render_get_service`,
+`render_list_deploys`, `render_get_deploy`, `render_trigger_deploy`,
+`render_update_env_var`, and `render_list_logs`. Useful for asking the agent
+to check on or redeploy itself (e.g. after diagnosing a production issue) —
+`get_service`/`list_deploys`/`get_deploy`/`list_logs` are read-only;
+`trigger_deploy` and `update_env_var` require approval like any other
+mutating tool. There's deliberately no "list/read env vars" tool — only
+`update_env_var` — so this can't be used to read back other secrets already
+configured on the service. An account-scoped API key has full account
+access, so only set this if you want the agent able to redeploy and change
+config on your behalf.
+
 ### When a model doesn't actually call tools
 
 Some models — especially smaller or older ones — don't reliably use the
@@ -350,5 +379,10 @@ npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
   Dockerfile) to stay well under a 512MB free/starter-tier container limit —
   without it, idle heap growth alone can trip the platform's OOM killer over
   a period of hours, since V8 doesn't proactively shrink the heap back down.
+- `RENDER_API_KEY` (if set) is account-scoped, not limited to
+  `CJW_RENDER_SERVICE_ID` — Render's API has no narrower key type. The
+  agent's own Render tools only ever touch the configured service, but the
+  key itself could reach any service on the account if a tool call somehow
+  did otherwise, so treat it with the same care as `GITHUB_TOKEN`.
   Raise it (and the container's memory limit) if deploying with more RAM, or
   if `browser_check`'s headless Chromium needs more headroom alongside it.
