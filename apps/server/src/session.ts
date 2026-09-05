@@ -24,6 +24,7 @@ import { TranscriptRecorder, renderTranscriptMarkdown } from "./transcript.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
+  question: string;
 }
 
 export class Session {
@@ -113,6 +114,15 @@ export class Session {
     if (entries.length) {
       this.send({ type: "history", entries, assistantOpen: this.transcript.assistantOpen });
     }
+    // A tool confirmation is only ever pushed once, over whatever socket happened to be attached
+    // at the moment it was requested. If the app was backgrounded (or a zombie connection dropped
+    // it silently) right then, the prompt never reached any client — but the server-side promise
+    // is still waiting, and nothing else will ever nudge it forward. Re-send every still-open one
+    // so a reconnecting client always gets a chance to answer it, instead of the turn hanging
+    // forever with busy stuck true.
+    for (const [callId, pending] of this.pendingConfirmations) {
+      this.send({ type: "awaiting_confirmation", callId, question: pending.question });
+    }
   }
 
   detach(ws: WebSocket): void {
@@ -194,7 +204,7 @@ export class Session {
     const callId = randomUUID();
     this.send({ type: "awaiting_confirmation", callId, question });
     return new Promise((resolve) => {
-      this.pendingConfirmations.set(callId, { resolve });
+      this.pendingConfirmations.set(callId, { resolve, question });
     });
   }
 

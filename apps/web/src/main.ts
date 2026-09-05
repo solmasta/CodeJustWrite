@@ -576,7 +576,16 @@ function addToolResultLine(name: string, result: string, error: boolean): void {
  *  most one question pending and one popup is always enough. Dismissing it any way other than an
  *  explicit choice (Escape, tapping the backdrop) counts as a deny, so the agent is never left
  *  waiting on a decision that will never come. */
+// A reconnect (see the Session.attach server-side re-send of still-open confirmations, for the
+// case where backgrounding dropped the original prompt before it was answered) can deliver an
+// awaiting_confirmation for a callId already on screen — showModal() throws if called on a dialog
+// that's already open, and re-adding listeners would double-fire the next click. Track which
+// callId is currently displayed so a duplicate resend is a no-op instead of either of those.
+let currentConfirmCallId: string | null = null;
+
 function showConfirmModal(question: string, callId: string): void {
+  if (confirmModal.open && currentConfirmCallId === callId) return;
+  currentConfirmCallId = callId;
   text(confirmQuestion, question);
   let decided = false;
   const decide = (approved: boolean) => {
@@ -596,7 +605,7 @@ function showConfirmModal(question: string, callId: string): void {
   confirmApproveBtn.addEventListener("click", onApprove, { once: true });
   confirmDenyBtn.addEventListener("click", onDeny, { once: true });
   confirmModal.addEventListener("close", () => decide(false), { once: true });
-  confirmModal.showModal();
+  if (!confirmModal.open) confirmModal.showModal();
 }
 
 function scrollToBottom(): void {
