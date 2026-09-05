@@ -1,18 +1,28 @@
+/* A syntax-highlighting-inspired palette (keyword purple, string green, error red) instead of
+   the single generic blue-on-navy most dark-mode apps default to — meant to read as "code editor"
+   rather than "chat app," on purpose. --*-bg/-border pairs are dark, low-saturation tints of the
+   same hue, for badges/status backgrounds that need to sit behind their own foreground color. */
 :root {
   color-scheme: dark;
-  --bg: #0b1120;
-  --panel: #111827;
-  --panel-2: #1a2333;
-  --border: #26324a;
-  --text: #e5e7eb;
-  --text-dim: #94a3b8;
-  --accent: #38bdf8;
-  --accent-dim: #0e7490;
-  --danger: #f87171;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --info: #60a5fa;
-  --radius: 14px;
+  --bg: #0a0e14;
+  --panel: #10141f;
+  --panel-2: #171c2b;
+  --hover-panel: #1e2436;
+  --border: #262c40;
+  --text: #dbe1ee;
+  --text-dim: #6b7280;
+  --accent: #c792ea;
+  --accent-dim: #4d3b73;
+  --accent-ink: #1a0f28;
+  --danger: #f07178;
+  --danger-bg: #2a1218;
+  --danger-border: #5c2028;
+  --success: #89ca78;
+  --success-ink: #08210c;
+  --warning: #ffcb6b;
+  --info: #82aaff;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 10px;
 }
 
 * {
@@ -46,10 +56,51 @@ body {
   background: var(--panel);
 }
 
+/* Three dots like a terminal/editor window's own title bar — a small, immediate visual cue that
+   this is a dev tool, not a generic chat app. Purely decorative. */
+.win-dots {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 5px;
+}
+
+.win-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.win-dots span:nth-child(1) {
+  background: var(--danger);
+}
+
+.win-dots span:nth-child(2) {
+  background: var(--warning);
+}
+
+.win-dots span:nth-child(3) {
+  background: var(--success);
+}
+
 .topbar h1 {
-  font-size: 16px;
+  font-family: var(--mono);
+  font-size: 15px;
   margin: 0;
   font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+.topbar h1 .cursor {
+  display: inline-block;
+  color: var(--accent);
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .topbar .sub {
@@ -89,7 +140,7 @@ body {
 }
 
 .connection-status.connecting {
-  background: rgba(96, 165, 250, 0.2);
+  background: rgba(130, 170, 255, 0.18);
   color: var(--info);
 }
 
@@ -99,7 +150,7 @@ body {
 }
 
 .connection-status.connected {
-  background: rgba(74, 222, 128, 0.2);
+  background: rgba(137, 202, 120, 0.18);
   color: var(--success);
 }
 
@@ -108,7 +159,7 @@ body {
 }
 
 .connection-status.disconnected {
-  background: rgba(248, 113, 113, 0.2);
+  background: rgba(240, 113, 120, 0.18);
   color: var(--danger);
 }
 
@@ -117,7 +168,7 @@ body {
 }
 
 .connection-status.reconnecting {
-  background: rgba(251, 191, 36, 0.2);
+  background: rgba(255, 203, 107, 0.18);
   color: var(--warning);
 }
 
@@ -164,7 +215,7 @@ body {
 .bubble.user {
   align-self: flex-end;
   background: var(--accent-dim);
-  color: #f0fdff;
+  color: #f3eaff;
   border-bottom-right-radius: 4px;
 }
 
@@ -183,9 +234,9 @@ body {
 
 .bubble.error {
   align-self: flex-start;
-  background: #3f1d1d;
+  background: var(--danger-bg);
   color: var(--danger);
-  border: 1px solid #7f1d1d;
+  border: 1px solid var(--danger-border);
 }
 
 /* Scrolling tool-activity log: each line is appended once and never mutated again, so there's
@@ -336,21 +387,21 @@ body {
 }
 
 .confirm-row .approve {
-  background: #14532d;
-  color: #dcfce7;
+  background: #1d4620;
+  color: #c8f7cf;
 }
 
 .confirm-row .approve:hover {
-  background: #166534;
+  background: #25562b;
 }
 
 .confirm-row .deny {
-  background: #450a0a;
-  color: #fecaca;
+  background: var(--danger-bg);
+  color: #ffd0d6;
 }
 
 .confirm-row .deny:hover {
-  background: #7f1d1d;
+  background: var(--danger-border);
 }
 
 .composer {
@@ -379,14 +430,16 @@ body {
   border-color: var(--accent-dim);
 }
 
+/* A "run" button rather than a chat-app send bubble — green like an editor's own run/play
+   control, rounded-square instead of a circle to read as a toolbar action. */
 .composer button {
   border: none;
-  border-radius: 50%;
+  border-radius: var(--radius);
   width: 42px;
   height: 42px;
-  background: var(--accent);
-  color: #04222d;
-  font-size: 18px;
+  background: var(--success);
+  color: var(--success-ink);
+  font-size: 16px;
   cursor: pointer;
   flex-shrink: 0;
   transition: opacity 0.15s, transform 0.1s;
@@ -430,7 +483,10 @@ body {
   font-size: 14px;
 }
 
-.setup label {
+/* Form controls and buttons below are deliberately NOT scoped to .setup — the settings drawer
+   uses the same <label>/<select>/button.primary/button.secondary markup pattern and gets the
+   same styling for free, instead of rendering as unstyled browser defaults there. */
+label {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -438,10 +494,10 @@ body {
   color: var(--text-dim);
 }
 
-.setup input,
-.setup select {
+input,
+select {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -449,8 +505,8 @@ body {
   transition: border-color 0.15s;
 }
 
-.setup input:focus,
-.setup select:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--accent-dim);
 }
@@ -465,59 +521,74 @@ body {
   min-width: 0; /* let inputs shrink instead of overflowing the row on narrow screens */
 }
 
-.setup button.primary {
+button.primary {
   padding: 12px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: none;
   background: var(--accent);
-  color: #04222d;
+  color: var(--accent-ink);
+  font-family: var(--mono);
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
   transition: opacity 0.15s;
 }
 
-.setup button.primary:hover {
+button.primary:hover {
   opacity: 0.9;
 }
 
-.setup button.primary:disabled {
+button.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.setup .hint {
+.hint {
   margin: -8px 0 0;
   font-size: 12px;
   color: var(--text-dim);
   text-align: center;
 }
 
-.setup .error {
+/* Unlike every other .hint use, this one doesn't follow an <input> the -8px pulls it up toward —
+   it follows a plain label, so that same negative margin instead overlapped the two. */
+#exportFolderSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#exportFolderSection .hint {
+  margin: 0;
+  text-align: left;
+}
+
+.error {
   color: var(--danger);
   font-size: 13px;
   padding: 10px;
   border-radius: 8px;
-  background: #3f1d1d;
+  background: var(--danger-bg);
   text-align: center;
 }
 
-.setup button.secondary {
+button.secondary {
   padding: 10px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
-  font-size: 14px;
+  font-family: var(--mono);
+  font-size: 13px;
   cursor: pointer;
   transition: background 0.15s;
 }
 
-.setup button.secondary:hover {
-  background: #1f2d44;
+button.secondary:hover {
+  background: var(--hover-panel);
 }
 
-.setup button.text-btn {
+button.text-btn {
   padding: 8px 12px;
   border: none;
   background: transparent;
@@ -528,11 +599,11 @@ body {
   transition: color 0.15s;
 }
 
-.setup button.text-btn:hover {
+button.text-btn:hover {
   color: var(--text);
 }
 
-.setup button.text-btn.small {
+button.text-btn.small {
   font-size: 12px;
   padding: 4px 8px;
   text-decoration: none;
@@ -618,7 +689,7 @@ body {
 
 .repo-item:hover {
   border-color: var(--accent-dim);
-  background: #1f2d44;
+  background: var(--hover-panel);
   transform: translateX(2px);
 }
 
@@ -765,8 +836,8 @@ body {
 .danger-btn {
   margin-top: auto;
   padding: 10px;
-  border-radius: 10px;
-  border: 1px solid #7f1d1d;
+  border-radius: var(--radius);
+  border: 1px solid var(--danger-border);
   background: transparent;
   color: var(--danger);
   cursor: pointer;
@@ -774,7 +845,7 @@ body {
 }
 
 .danger-btn:hover {
-  background: rgba(248, 113, 113, 0.1);
+  background: rgba(240, 113, 120, 0.1);
 }
 
 /* Loading spinner */
