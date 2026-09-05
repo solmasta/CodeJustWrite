@@ -17,6 +17,7 @@ import {
 import { createPullRequestTool, mergePullRequestTool, getPullRequestStatusTool } from "./github.js";
 import { runTestsTool } from "./tests.js";
 import { browserCheckTool } from "./playwright.js";
+import { renderTools } from "./render.js";
 import type { ToolDefinition } from "./types.js";
 
 export const allTools: ToolDefinition[] = [
@@ -44,6 +45,7 @@ export const allTools: ToolDefinition[] = [
   getPullRequestStatusTool,
   runTestsTool,
   browserCheckTool,
+  ...renderTools,
 ];
 
 export const toolsByName = new Map(allTools.map((t) => [t.spec.name, t]));

@@ -8,6 +8,8 @@ export interface CjwConfig {
   deepinfraApiKey?: string;
   openrouterApiKey?: string;
   githubToken?: string;
+  renderApiKey?: string;
+  renderServiceId?: string;
   shellTimeoutSec: number;
   mcpServers: McpServerConfig[];
 }
@@ -27,6 +29,8 @@ export function loadConfig(): CjwConfig {
     deepinfraApiKey: process.env.DEEPINFRA_KEY,
     openrouterApiKey: process.env.OPENROUTER_KEY,
     githubToken: process.env.GITHUB_TOKEN,
+    renderApiKey: process.env.RENDER_API_KEY,
+    renderServiceId: process.env.CJW_RENDER_SERVICE_ID,
     shellTimeoutSec: Number(process.env.CJW_SHELL_TIMEOUT_SEC || 120),
     mcpServers: parseMcpServers(process.env.CJW_MCP_SERVERS),
   };
