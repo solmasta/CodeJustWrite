@@ -503,7 +503,9 @@ function addBubble(role: "user" | "assistant" | "system", content: string): HTML
 /** Picks one argument to show inline next to the tool name, the way Claude Code's own terminal
  *  UI shows e.g. "Write(file.ts)" instead of the tool's full raw argument JSON — the latter used
  *  to dump an entire file's contents into the chat feed for write_file/edit_file, which is what
- *  buried the approve/deny buttons under a wall of text on any non-trivial change. */
+ *  buried the approve/deny buttons under a wall of text on any non-trivial change.
+ *  Keep in sync with apps/server/src/transcript.ts's summarizeArgs — same preferredKeys/
+ *  truncation, duplicated because this client bundle has no runtime dependency on server code. */
 function primaryArgSummary(args: Record<string, unknown>): string {
   const preferredKeys = ["path", "pattern", "command", "url", "branch", "title", "message", "script", "pullNumber"];
   for (const key of preferredKeys) {
@@ -582,9 +584,17 @@ function addToolResultLine(name: string, result: string, error: boolean): void {
 // that's already open, and re-adding listeners would double-fire the next click. Track which
 // callId is currently displayed so a duplicate resend is a no-op instead of either of those.
 let currentConfirmCallId: string | null = null;
+// Belt-and-suspenders for the same double-fire risk, but for a genuinely different callId arriving
+// while one is still on screen: the server-side invariant (see the comment above) says that can
+// never happen, but if it ever did, this aborts the previous invocation's listeners before adding
+// a new set, so a click can only ever reach one decide() rather than both.
+let currentConfirmAbort: AbortController | null = null;
 
 function showConfirmModal(question: string, callId: string): void {
   if (confirmModal.open && currentConfirmCallId === callId) return;
+  currentConfirmAbort?.abort();
+  const controller = new AbortController();
+  currentConfirmAbort = controller;
   currentConfirmCallId = callId;
   text(confirmQuestion, question);
   let decided = false;
@@ -602,9 +612,10 @@ function showConfirmModal(question: string, callId: string): void {
     decide(false);
     confirmModal.close();
   };
-  confirmApproveBtn.addEventListener("click", onApprove, { once: true });
-  confirmDenyBtn.addEventListener("click", onDeny, { once: true });
-  confirmModal.addEventListener("close", () => decide(false), { once: true });
+  const { signal } = controller;
+  confirmApproveBtn.addEventListener("click", onApprove, { once: true, signal });
+  confirmDenyBtn.addEventListener("click", onDeny, { once: true, signal });
+  confirmModal.addEventListener("close", () => decide(false), { once: true, signal });
   if (!confirmModal.open) confirmModal.showModal();
 }
 

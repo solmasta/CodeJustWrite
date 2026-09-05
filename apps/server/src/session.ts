@@ -197,9 +197,14 @@ export class Session {
   }
 
   /** Renders the conversation so far into a Markdown note for the "export/save locally"
-   *  download — see renderTranscriptMarkdown for what it does and doesn't include. */
+   *  download — see renderTranscriptMarkdown for what it does and doesn't include. Runs the same
+   *  redactSecrets scrub that send() applies to every live WS message — a tool's raw output (e.g.
+   *  `run_shell("git remote -v")` echoing the token embedded in origin's URL) can carry a secret
+   *  into the recorded transcript, and this is the one other place that transcript data leaves
+   *  the server, so it needs the same treatment or a downloaded file could contain it in the clear. */
   buildExportMarkdown(repoName: string): string {
-    return renderTranscriptMarkdown(this.transcript.getEntries(), repoName, this.createdAt);
+    const entries = redactSecrets(this.transcript.getEntries(), this.secrets);
+    return renderTranscriptMarkdown(entries, repoName, this.createdAt);
   }
 
   private requestConfirmation(question: string): Promise<boolean> {

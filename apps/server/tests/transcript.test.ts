@@ -114,14 +114,25 @@ describe("renderTranscriptMarkdown", () => {
     expect(md.length).toBeLessThan(2000); // the repeated 6000-char result must be truncated, not dumped
   });
 
-  it("renders only the first line of a diff/log entry", () => {
+  it("renders a diff entry as a +/- line-count summary, not the raw diff text", () => {
+    // Shaped like actual createTwoFilesPatch output (see fs.ts's patchDiff) — its "Index: <file>"
+    // header would be a useless first line to show, since the tool_call line already names the
+    // file; a line-change count is the useful summary instead.
     const md = renderTranscriptMarkdown(
-      [{ type: "diff", text: "--- a/x.ts\n+++ b/x.ts\n@@ -1,3 +1,3 @@\n-old\n+new" }],
+      [
+        {
+          type: "diff",
+          text:
+            "Index: x.ts\n===================================================================\n" +
+            "--- x.ts\n+++ x.ts\n@@ -1,3 +1,3 @@\n a\n-old\n+new1\n+new2\n c",
+        },
+      ],
       "owner/repo",
       Date.now()
     );
-    expect(md).toContain("> --- a/x.ts");
-    expect(md).not.toContain("+++ b/x.ts");
+    expect(md).toContain("> +2 −1 lines changed");
+    expect(md).not.toContain("Index: x.ts");
+    expect(md).not.toContain("old");
   });
 
   it("omits an assistant entry with no text (e.g. a tool-call-only turn)", () => {
