@@ -20,7 +20,7 @@ import {
   type ToolDefinition,
 } from "@codejustwrite/core";
 import { redactSecrets, withGithubToken } from "./secrets.js";
-import { TranscriptRecorder, renderBackupMarkdown } from "./transcript.js";
+import { TranscriptRecorder } from "./transcript.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
@@ -180,12 +180,6 @@ export class Session {
     } finally {
       this.busy = false;
     }
-  }
-
-  /** Renders the conversation so far into a Markdown note for the "Save to Drive" feature — see
-   *  renderBackupMarkdown for what it does and doesn't include. */
-  buildBackupMarkdown(repoName: string): string {
-    return renderBackupMarkdown(this.transcript.getEntries(), repoName, this.createdAt);
   }
 
   private requestConfirmation(question: string): Promise<boolean> {
