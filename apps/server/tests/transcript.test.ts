@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TranscriptRecorder, renderTranscriptMarkdown } from "../src/transcript.js";
+import { TranscriptRecorder, renderTranscriptMarkdown, sanitizeFilenameSlug, summarizableText } from "../src/transcript.js";
 
 describe("TranscriptRecorder", () => {
   it("groups consecutive assistant deltas into a single entry", () => {
@@ -138,5 +138,59 @@ describe("renderTranscriptMarkdown", () => {
   it("omits an assistant entry with no text (e.g. a tool-call-only turn)", () => {
     const md = renderTranscriptMarkdown([{ type: "assistant", text: "" }], "owner/repo", Date.now());
     expect(md).not.toContain("**Assistant:**");
+  });
+});
+
+describe("sanitizeFilenameSlug", () => {
+  it("lowercases and hyphenates a normal model reply", () => {
+    expect(sanitizeFilenameSlug("Fix OOM Memory Leak")).toBe("fix-oom-memory-leak");
+  });
+
+  it("strips punctuation and collapses runs of separators into one hyphen", () => {
+    expect(sanitizeFilenameSlug('"fix: the OOM/memory leak!!"')).toBe("fix-the-oom-memory-leak");
+  });
+
+  it("trims leading/trailing hyphens left over from stripped punctuation", () => {
+    expect(sanitizeFilenameSlug("-- fix bug --")).toBe("fix-bug");
+  });
+
+  it("caps length at 60 characters without leaving a trailing hyphen", () => {
+    const long = "word ".repeat(30).trim();
+    const slug = sanitizeFilenameSlug(long);
+    expect(slug.length).toBeLessThanOrEqual(60);
+    expect(slug.endsWith("-")).toBe(false);
+  });
+
+  it("returns an empty string (not a fallback) when nothing usable survives", () => {
+    expect(sanitizeFilenameSlug("!!! ??? ...")).toBe("");
+    expect(sanitizeFilenameSlug("")).toBe("");
+  });
+});
+
+describe("summarizableText", () => {
+  it("includes only user/assistant text, skipping tool call/result/diff entries", () => {
+    const text = summarizableText([
+      { type: "user", text: "fix the bug" },
+      { type: "tool_call", name: "read_file", args: { path: "a.ts" } },
+      { type: "tool_result", name: "read_file", result: "...", error: false },
+      { type: "diff", text: "some diff" },
+      { type: "assistant", text: "Found it, fixing now." },
+    ]);
+    expect(text).toBe("User: fix the bug\nAssistant: Found it, fixing now.");
+  });
+
+  it("returns an empty string for a transcript with no user/assistant text", () => {
+    expect(summarizableText([{ type: "tool_call", name: "read_file", args: {} }])).toBe("");
+  });
+
+  it("caps output length, keeping the most recent text rather than the oldest", () => {
+    const entries = Array.from({ length: 50 }, (_, i) => ({
+      type: "user" as const,
+      text: `message number ${i}`,
+    }));
+    const text = summarizableText(entries, 100);
+    expect(text.length).toBeLessThanOrEqual(100);
+    expect(text).toContain("message number 49");
+    expect(text).not.toContain("message number 0\n");
   });
 });

@@ -169,6 +169,17 @@ this device, the same way any other website's "download" button works. No
 account, no third-party service, nothing kept on the server beyond what it
 already keeps for the session.
 
+The filename itself is generated from the conversation — a short, one-off
+model call summarizes what it's actually about (e.g.
+`fix-oom-memory-leak-2026-09-05T...md`) instead of a generic
+repo-name-plus-timestamp name; if that call fails for any reason (no
+provider key, rate limit), it falls back to the old naming scheme rather
+than breaking the export. On Chromium-based browsers (desktop, Android —
+not Safari/iOS, which doesn't implement the underlying File System Access
+API), Settings → "Save conversations to" lets you pick a folder once;
+every export after that writes straight there with no dialog, until you
+choose "Forget folder."
+
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique

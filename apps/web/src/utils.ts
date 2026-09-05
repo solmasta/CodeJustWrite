@@ -85,6 +85,15 @@ export function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
+/** Builds the export's actual filename: the server-generated conversation-summary slug if it
+ *  provided one, otherwise the previous repoName-based scheme — always suffixed with a sortable
+ *  timestamp so repeat exports of an evolving conversation never collide or silently overwrite
+ *  each other. */
+export function buildExportFilename(slug: string | null, repoName: string, stamp: string): string {
+  const base = slug ? slug : `codejustwrite-${repoName.replace(/[/\\]/g, "-")}`;
+  return `${base}-${stamp}.md`;
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;

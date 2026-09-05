@@ -45,6 +45,11 @@ app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // A cross-origin fetch() only exposes a small built-in allowlist of response headers by
+  // default (Content-Type, etc.) — a custom header like the export route's suggested filename
+  // needs to be explicitly opted into that allowlist, or res.headers.get() on the client side
+  // just silently returns null even though the server did send it.
+  res.header("Access-Control-Expose-Headers", "X-Export-Filename");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
     return;
@@ -181,7 +186,7 @@ app.delete("/api/session/:id", async (req, res) => {
 // A local, no-account export: the client fetches this (already authenticated, same as any other
 // /api call) and saves the response as a file via a Blob + <a download> — no server-side storage,
 // no third-party service, the file goes straight to whatever "Downloads" means on the phone.
-app.get("/api/session/:id/export", (req, res) => {
+app.get("/api/session/:id/export", async (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) {
     res.status(404).json({ error: "Session not found" });
@@ -189,6 +194,10 @@ app.get("/api/session/:id/export", (req, res) => {
   }
   const repoName =
     typeof req.query.repoName === "string" && req.query.repoName.trim() ? req.query.repoName.trim() : "unknown-repo";
+  // Best-effort: buildFilenameSlug() never throws (see its own doc comment), so a slow or failed
+  // provider call degrades to no header at all, never to a failed export.
+  const slug = await session.buildFilenameSlug();
+  if (slug) res.set("X-Export-Filename", slug);
   res.type("text/markdown").send(session.buildExportMarkdown(repoName));
 });
 
