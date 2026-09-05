@@ -10,6 +10,8 @@ export interface CjwConfig {
   githubToken?: string;
   renderApiKey?: string;
   renderServiceId?: string;
+  cloudflareApiToken?: string;
+  cloudflareZoneId?: string;
   shellTimeoutSec: number;
   mcpServers: McpServerConfig[];
 }
@@ -31,6 +33,8 @@ export function loadConfig(): CjwConfig {
     githubToken: process.env.GITHUB_TOKEN,
     renderApiKey: process.env.RENDER_API_KEY,
     renderServiceId: process.env.CJW_RENDER_SERVICE_ID,
+    cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN,
+    cloudflareZoneId: process.env.CJW_CLOUDFLARE_ZONE_ID,
     shellTimeoutSec: Number(process.env.CJW_SHELL_TIMEOUT_SEC || 120),
     mcpServers: parseMcpServers(process.env.CJW_MCP_SERVERS),
   };
