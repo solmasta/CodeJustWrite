@@ -84,6 +84,32 @@ function summarizeDiffStat(diffText: string): string {
   return `+${added} −${removed} lines changed`;
 }
 
+/** Turns a model's free-text reply into a safe, bounded filename slug: lowercase, hyphenated,
+ *  alphanumeric only. Returns "" (not a fallback string) if nothing usable survives — the caller
+ *  decides what a missing slug should fall back to, since that differs by call site. */
+export function sanitizeFilenameSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+}
+
+/** Just the human-written parts of a conversation (user/assistant text, no tool call/result/diff
+ *  noise) for summarizing "what is this about" — capped so a long-running conversation doesn't
+ *  blow the prompt budget just to name a file. Read from the end: a title should reflect the most
+ *  recent work, which matters most once a session has drifted across several unrelated tasks. */
+export function summarizableText(entries: TranscriptEntry[], maxChars = 4000): string {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.type === "user" && entry.text) parts.push(`User: ${entry.text}`);
+    else if (entry.type === "assistant" && entry.text) parts.push(`Assistant: ${entry.text}`);
+  }
+  const joined = parts.join("\n");
+  return joined.length > maxChars ? joined.slice(-maxChars) : joined;
+}
+
 // Keep in sync with apps/web/src/main.ts's primaryArgSummary — same preferredKeys/truncation,
 // duplicated because the client bundle has no runtime dependency on server code (or vice versa).
 function summarizeArgs(args: Record<string, unknown> | undefined): string {

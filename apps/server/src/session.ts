@@ -20,7 +20,7 @@ import {
   type ToolDefinition,
 } from "@codejustwrite/core";
 import { redactSecrets, withGithubToken } from "./secrets.js";
-import { TranscriptRecorder, renderTranscriptMarkdown } from "./transcript.js";
+import { TranscriptRecorder, renderTranscriptMarkdown, sanitizeFilenameSlug, summarizableText } from "./transcript.js";
 
 export interface PendingConfirmation {
   resolve: (approved: boolean) => void;
@@ -193,6 +193,36 @@ export class Session {
       this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Best-effort short filename slug ("fix-oom-memory-leak") summarizing what this conversation
+   *  is about, for the "export/save locally" download's suggested filename. A one-off, non-tool
+   *  completion on the session's own configured provider/model — any failure (no API key
+   *  configured, rate limit, an empty/unusable reply) resolves to null rather than throwing, so a
+   *  cosmetic naming feature can never break the export itself. */
+  async buildFilenameSlug(): Promise<string | null> {
+    const conversation = summarizableText(this.transcript.getEntries());
+    if (!conversation.trim()) return null;
+    try {
+      const provider = this.registry.get(this.provider);
+      const result = await provider.complete(
+        [
+          {
+            role: "system",
+            content:
+              "Reply with ONLY 3 to 6 words in kebab-case (lowercase letters, digits, and hyphens " +
+              "only — no other punctuation, no quotes, no explanation) summarizing what this " +
+              "conversation is about, suitable as a filename.",
+          },
+          { role: "user", content: conversation },
+        ],
+        [],
+        this.model
+      );
+      return sanitizeFilenameSlug(result.message.content ?? "") || null;
+    } catch {
+      return null;
     }
   }
 

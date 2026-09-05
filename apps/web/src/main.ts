@@ -11,7 +11,14 @@ import {
   clearDraft,
 } from "./settings.js";
 import { createConnection } from "./connection.js";
-import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce } from "./utils.js";
+import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce, buildExportFilename } from "./utils.js";
+import {
+  supportsExportFolder,
+  saveExportDirHandle,
+  loadExportDirHandle,
+  clearExportDirHandle,
+  hasReadWritePermission,
+} from "./exportFolder.js";
 
 // --- DOM refs ---
 const signInSection = el<HTMLDivElement>("#signInSection");
@@ -51,6 +58,10 @@ const promptPresetSelect = el<HTMLSelectElement>("#promptPreset");
 const promptPresetHint = el<HTMLParagraphElement>("#promptPresetHint");
 const customInstructionsInput = el<HTMLTextAreaElement>("#customInstructions");
 const autoApproveCheck = el<HTMLInputElement>("#autoApprove");
+const exportFolderSection = el<HTMLDivElement>("#exportFolderSection");
+const exportFolderLabel = el<HTMLParagraphElement>("#exportFolderLabel");
+const chooseExportFolderBtn = el<HTMLButtonElement>("#chooseExportFolderBtn");
+const clearExportFolderBtn = el<HTMLButtonElement>("#clearExportFolderBtn");
 const saveSettingsBtn = el<HTMLButtonElement>("#saveSettings");
 const closeSettingsBtn = el<HTMLButtonElement>("#closeSettings");
 
@@ -273,8 +284,12 @@ function connectWebSocket(sessionId: string): void {
 /** Saves the current conversation as a Markdown file directly on this device — no account, no
  *  third-party service, nothing left on the server beyond what it already keeps for the session.
  *  Fetches the rendered transcript (already authenticated, same as any other /api call — a plain
- *  navigation couldn't carry the bearer token) and hands the browser a Blob to save, the same way
- *  any other "download this" button on the web works. */
+ *  navigation couldn't carry the bearer token); the server also does a best-effort one-off model
+ *  call to name the file after what the conversation is actually about (see the
+ *  X-Export-Filename response header, and Session.buildFilenameSlug on the server), falling back
+ *  to the old repoName-based name if that didn't produce anything usable. If a save folder was
+ *  chosen in Settings (see chooseExportFolder), writes straight there with no dialog; otherwise
+ *  hands the browser a Blob to save, the same way any other "download this" button works. */
 async function exportConversation(): Promise<void> {
   const active = loadActiveSession();
   if (!active || exportBtn.disabled) return;
@@ -285,16 +300,27 @@ async function exportConversation(): Promise<void> {
     const res = await apiFetch(settings, `/api/session/${active.sessionId}/export?repoName=${encodeURIComponent(active.repoName)}`);
     if (!res.ok) throw new Error(`Export failed (HTTP ${res.status})`);
     const markdown = await res.text();
-    const blob = new Blob([markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `codejustwrite-${active.repoName.replace(/[/\\]/g, "-")}-${stamp}.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const filename = buildExportFilename(res.headers.get("X-Export-Filename"), active.repoName, stamp);
+
+    const dirHandle = supportsExportFolder ? await loadExportDirHandle().catch(() => null) : null;
+    if (dirHandle && (await hasReadWritePermission(dirHandle))) {
+      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(markdown);
+      await writable.close();
+      addBubble("system", `Saved "${filename}" to "${dirHandle.name}".`);
+    } else {
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
   } catch (e) {
     addBubble("system", `Couldn't save conversation: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
@@ -646,6 +672,44 @@ function openSettings(): void {
   customInstructionsInput.value = settings.customInstructions || "";
   settingsModal.showModal();
   refreshModels();
+  void refreshExportFolderUI();
+}
+
+/** The "save folder" picker only exists on browsers implementing the File System Access API
+ *  (Chromium-based; not Safari/iOS) — the whole section stays hidden everywhere else, so an
+ *  iPhone user just never sees a control that couldn't work for them anyway. */
+async function refreshExportFolderUI(): Promise<void> {
+  if (!supportsExportFolder) {
+    hide(exportFolderSection);
+    return;
+  }
+  show(exportFolderSection);
+  const handle = await loadExportDirHandle().catch(() => null);
+  if (handle) {
+    text(exportFolderLabel, `Saving to "${handle.name}" — the 💾 button writes straight there.`);
+    show(clearExportFolderBtn);
+  } else {
+    text(exportFolderLabel, "No folder chosen — the 💾 button downloads normally.");
+    hide(clearExportFolderBtn);
+  }
+}
+
+async function chooseExportFolder(): Promise<void> {
+  try {
+    const handle = await window.showDirectoryPicker({ id: "cjw-export", mode: "readwrite" });
+    await saveExportDirHandle(handle);
+  } catch (e) {
+    // AbortError is just the user cancelling the picker — not worth a message.
+    if (e instanceof DOMException && e.name === "AbortError") return;
+    addBubble("system", `Couldn't set the save folder: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    void refreshExportFolderUI();
+  }
+}
+
+async function forgetExportFolder(): Promise<void> {
+  await clearExportDirHandle();
+  void refreshExportFolderUI();
 }
 
 /** Populates the "Prompt style" dropdown from whichever preset list the server sent in its
@@ -763,6 +827,8 @@ function init(): void {
 
   settingsBtn.addEventListener("click", openSettings);
   exportBtn.addEventListener("click", () => void exportConversation());
+  chooseExportFolderBtn.addEventListener("click", () => void chooseExportFolder());
+  clearExportFolderBtn.addEventListener("click", () => void forgetExportFolder());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
   providerSelect.addEventListener("change", refreshModels);

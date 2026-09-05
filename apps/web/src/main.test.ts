@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidUrl, escapeHtml } from "./utils";
+import { isValidUrl, escapeHtml, buildExportFilename } from "./utils";
 
 describe("main utilities", () => {
   describe("isValidUrl", () => {
@@ -40,6 +40,26 @@ describe("main utilities", () => {
 
     it("leaves plain text untouched", () => {
       expect(escapeHtml("hello world")).toBe("hello world");
+    });
+  });
+
+  describe("buildExportFilename", () => {
+    it("uses the server-provided slug when given", () => {
+      expect(buildExportFilename("fix-oom-leak", "my-repo", "2026-01-01T00-00-00")).toBe(
+        "fix-oom-leak-2026-01-01T00-00-00.md"
+      );
+    });
+
+    it("falls back to the repoName-based scheme when there's no slug", () => {
+      expect(buildExportFilename(null, "my-repo", "2026-01-01T00-00-00")).toBe(
+        "codejustwrite-my-repo-2026-01-01T00-00-00.md"
+      );
+    });
+
+    it("replaces slashes in the repoName fallback so it stays a single valid filename", () => {
+      expect(buildExportFilename(null, "org/my-repo", "2026-01-01T00-00-00")).toBe(
+        "codejustwrite-org-my-repo-2026-01-01T00-00-00.md"
+      );
     });
   });
 });
