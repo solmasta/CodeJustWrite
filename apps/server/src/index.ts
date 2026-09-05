@@ -84,6 +84,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// An entry's own window expiring doesn't remove it from the map — only a later request from that
+// same IP does, by overwriting it — so an IP that never comes back (routine on a public health
+// check endpoint, hit by all kinds of scanners/monitors) leaves its entry behind forever. Sweep
+// expired entries out periodically so this map can't grow unbounded over the service's uptime.
+const rateLimitSweep = setInterval(() => {
+  const now = Date.now();
+  for (const [ip, limit] of rateLimits) {
+    if (now > limit.resetTime) rateLimits.delete(ip);
+  }
+}, 5 * 60_000);
+rateLimitSweep.unref();
+
 app.get("/api/health", (_req, res) => {
   const mem = process.memoryUsage();
   res.json({
