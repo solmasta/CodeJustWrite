@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidUrl, escapeHtml, buildExportFilename } from "./utils";
+import { isValidUrl, escapeHtml, buildExportFilename, buildImportMessage } from "./utils";
 
 describe("main utilities", () => {
   describe("isValidUrl", () => {
@@ -59,6 +59,28 @@ describe("main utilities", () => {
     it("replaces slashes in the repoName fallback so it stays a single valid filename", () => {
       expect(buildExportFilename(null, "org/my-repo", "2026-01-01T00-00-00")).toBe(
         "codejustwrite-org-my-repo-2026-01-01T00-00-00.md"
+      );
+    });
+  });
+
+  describe("buildImportMessage", () => {
+    it("wraps the file content with the filename and no truncation note when it fits", () => {
+      expect(buildImportMessage("chat.md", "hello world", 100)).toBe(
+        'Here\'s an earlier conversation for context (imported from "chat.md"):\n\nhello world'
+      );
+    });
+
+    it("truncates content over maxChars and notes the truncation", () => {
+      const content = "0123456789";
+      expect(buildImportMessage("chat.md", content, 5)).toBe(
+        'Here\'s an earlier conversation for context (imported from "chat.md", truncated to fit):\n\n01234'
+      );
+    });
+
+    it("does not truncate when content is exactly maxChars", () => {
+      const content = "01234";
+      expect(buildImportMessage("chat.md", content, 5)).toBe(
+        'Here\'s an earlier conversation for context (imported from "chat.md"):\n\n01234'
       );
     });
   });

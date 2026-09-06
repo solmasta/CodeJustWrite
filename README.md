@@ -180,6 +180,14 @@ API), Settings → "Save conversations to" lets you pick a folder once;
 every export after that writes straight there with no dialog, until you
 choose "Forget folder."
 
+**Importing a saved conversation**: tap the 📥 button in the topbar and pick
+a previously exported Markdown file. It's fed to the agent as context for
+the current session — not restored as chat bubbles — as a single message
+prefixed with where it came from, so you can say something like "continue
+from this" right after. Files over 50,000 characters are truncated to fit
+(an export is already a condensed summary, so a well-formed one is nowhere
+near that limit).
+
 ## Tools available to the agent
 
 - **File tools** — `read_file`, `list_dir`, `write_file`, `edit_file` (unique

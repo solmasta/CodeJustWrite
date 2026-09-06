@@ -79,8 +79,10 @@
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
+            <button id="importBtn" class="icon-btn" aria-label="Import a saved conversation" title="Feed a previously saved conversation file to the agent as context">📥</button>
             <button id="exportBtn" class="icon-btn" aria-label="Save conversation to this device" title="Save this conversation as a file on this device">💾</button>
             <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
+            <input type="file" id="importFileInput" accept=".md,text/markdown" class="hidden" />
           </div>
         </div>
 

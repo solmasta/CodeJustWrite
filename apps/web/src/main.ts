@@ -11,7 +11,7 @@ import {
   clearDraft,
 } from "./settings.js";
 import { createConnection } from "./connection.js";
-import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce, buildExportFilename } from "./utils.js";
+import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce, buildExportFilename, buildImportMessage } from "./utils.js";
 import {
   supportsExportFolder,
   saveExportDirHandle,
@@ -44,6 +44,8 @@ const typingIndicator = el<HTMLDivElement>("#typingIndicator");
 const settingsBtn = el<HTMLButtonElement>("#settingsBtn");
 const connectionStatus = el<HTMLSpanElement>("#connectionStatus");
 const exportBtn = el<HTMLButtonElement>("#exportBtn");
+const importBtn = el<HTMLButtonElement>("#importBtn");
+const importFileInput = el<HTMLInputElement>("#importFileInput");
 
 const confirmModal = el<HTMLDialogElement>("#confirmModal");
 const confirmQuestion = el<HTMLParagraphElement>("#confirmQuestion");
@@ -703,17 +705,38 @@ function scrollToBottom(): void {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
+/** Shared by the composer and the import-a-conversation button — both just need to hand text to
+ *  the agent as a fresh user turn. */
+function sendUserMessage(message: string): void {
+  addBubble("user", message);
+  typingIndicator.classList.remove("hidden");
+  isProcessing = true;
+  connection?.send({ type: "user_message", text: message });
+}
+
 function sendChat(): void {
   if (isProcessing) return;
   const message = chatInput.value.trim();
   if (!message) return;
-  addBubble("user", message);
   chatInput.value = "";
   cancelDraftSave();
   clearDraft();
-  typingIndicator.classList.remove("hidden");
-  isProcessing = true;
-  connection?.send({ type: "user_message", text: message });
+  sendUserMessage(message);
+}
+
+// Caps how much of an imported file gets sent — an export is already a condensed summary (see
+// transcript.ts), so a well-formed one is nowhere near this; this is a guardrail against
+// accidentally importing something huge and blowing past a small free model's context window.
+const MAX_IMPORT_CHARS = 50_000;
+
+async function importConversation(file: File): Promise<void> {
+  if (!connection || isProcessing) return;
+  try {
+    const raw = await file.text();
+    sendUserMessage(buildImportMessage(file.name, raw, MAX_IMPORT_CHARS));
+  } catch (e) {
+    addBubble("system", `Couldn't import "${file.name}": ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // --- Settings Modal ---
@@ -881,6 +904,12 @@ function init(): void {
 
   settingsBtn.addEventListener("click", openSettings);
   exportBtn.addEventListener("click", () => void exportConversation());
+  importBtn.addEventListener("click", () => importFileInput.click());
+  importFileInput.addEventListener("change", () => {
+    const file = importFileInput.files?.[0];
+    importFileInput.value = ""; // allow re-selecting the same file later
+    if (file) void importConversation(file);
+  });
   chooseExportFolderBtn.addEventListener("click", () => void chooseExportFolder());
   clearExportFolderBtn.addEventListener("click", () => void forgetExportFolder());
   saveSettingsBtn.addEventListener("click", saveSettings);
