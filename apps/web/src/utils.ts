@@ -77,6 +77,18 @@ export function debounce<T extends (...args: unknown[]) => void>(
   };
 }
 
+/** Builds the message sent to the agent when importing a previously exported conversation file —
+ *  capped at maxChars (an export is already a condensed summary, see the server's
+ *  renderTranscriptMarkdown, so a well-formed one is nowhere near this; this guards against
+ *  accidentally importing something huge and blowing past a small free model's context window). */
+export function buildImportMessage(filename: string, content: string, maxChars: number): string {
+  const truncated = content.length > maxChars;
+  const text = truncated ? content.slice(0, maxChars) : content;
+  return `Here's an earlier conversation for context (imported from "${filename}"${
+    truncated ? ", truncated to fit" : ""
+  }):\n\n${text}`;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
