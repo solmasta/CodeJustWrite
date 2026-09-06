@@ -16,7 +16,7 @@ describe("settings", () => {
       const settings = loadSettings();
       expect(settings.serverUrl).toBe("");
       expect(settings.token).toBe("");
-      expect(settings.provider).toBe("deepinfra");
+      expect(settings.provider).toBe("openrouter");
       expect(settings.recentRepos).toEqual([]);
       expect(settings.promptPreset).toBe("default");
       expect(settings.customInstructions).toBe("");
