@@ -30,9 +30,15 @@ ENV NODE_ENV=production
 # git is required at runtime: the server shells out to it to clone repos
 # and the agent's git/PR tools run inside those clones. python3/pip3 and
 # curl are here so run_shell/run_tests aren't limited to a bare Node image
-# when working in a non-JS repo.
+# when working in a non-JS repo. tini becomes PID 1 below — Chromium (via
+# browser_check) spawns a whole tree of child processes (renderer, GPU,
+# zygote/sandbox helpers), and Node itself doesn't reap orphans the way a
+# real init process does; without one, a child that outlives its immediate
+# parent (a crash, a forced close under memory pressure) is reparented to
+# PID 1 and just accumulates instead of being cleaned up. This is Playwright's
+# own documented recommendation for running headless Chromium in Docker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates python3 python3-pip curl \
+    git ca-certificates python3 python3-pip curl tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/node_modules ./node_modules
@@ -67,4 +73,5 @@ EXPOSE 8787
 # headroom for non-heap memory (buffers, native modules, thread stacks) plus whatever a spawned
 # git/npm/pytest child process or headless Chromium instance (browser_check) needs alongside it —
 # raise this (or the container's memory limit) if deploying with more RAM available.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "--max-old-space-size=350", "apps/server/dist/index.js"]

@@ -90,7 +90,13 @@ async function runBrowserCheck(args: Record<string, unknown>, ctx: ToolContext):
   const actions = (args.actions as BrowserAction[] | undefined) ?? [];
   const takeScreenshot = args.screenshot !== false;
 
-  const browser = await chromium.launch({ executablePath: resolveExecutablePath() });
+  const browser = await chromium.launch({
+    executablePath: resolveExecutablePath(),
+    // Docker's default /dev/shm is only 64MB; Chromium falls back to disk-backed shared memory
+    // instead of crashing/misbehaving under that limit when this is set — standard guidance for
+    // running headless Chromium in a container.
+    args: ["--disable-dev-shm-usage"],
+  });
   const consoleMessages: string[] = [];
 
   let timedOut = false;
