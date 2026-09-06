@@ -19,7 +19,9 @@ services:
       - key: CJW_MCP_SERVERS
         sync: false # optional: JSON array of MCP connectors, see README.md
       - key: CJW_DEFAULT_PROVIDER
-        value: deepinfra
+        value: openrouter
+      - key: CJW_DEFAULT_MODEL
+        value: cohere/north-mini-code:free
       - key: CJW_SESSION_TTL_MIN
         value: "120"
       - key: CJW_MAX_SESSIONS

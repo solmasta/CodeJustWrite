@@ -743,7 +743,7 @@ async function importConversation(file: File): Promise<void> {
 let modelsRequestedFor: string | null = null;
 
 function openSettings(): void {
-  providerSelect.value = settings.provider || "deepinfra";
+  providerSelect.value = settings.provider || "openrouter";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   populatePromptPresetSelect();
   customInstructionsInput.value = settings.customInstructions || "";

@@ -18,12 +18,12 @@ export interface CjwConfig {
 
 const DEFAULT_MODELS: Record<ProviderName, string> = {
   deepinfra: "moonshotai/Kimi-K3",
-  openrouter: "meta-llama/llama-3.1-70b-instruct",
+  openrouter: "cohere/north-mini-code:free",
 };
 
 export function loadConfig(): CjwConfig {
-  const provider = (process.env.CJW_DEFAULT_PROVIDER as ProviderName) || "deepinfra";
-  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.deepinfra;
+  const provider = (process.env.CJW_DEFAULT_PROVIDER as ProviderName) || "openrouter";
+  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openrouter;
 
   return {
     provider,

@@ -15,6 +15,15 @@ const chromiumLock = createMutex();
 // a request a vision model's own size limit would reject outright.
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 
+// page.goto and click/fill/waitForSelector each have their own timeout below, but page.evaluate
+// does not — an `evaluate` script that hangs (or a page with a runaway memory leak an action just
+// sits and waits on) can hold this open indefinitely. Since the whole call runs inside
+// chromiumLock, that also wedges every other session's browser_check behind it, and the leaking
+// Chromium process's memory (invisible to Node's own accounting, same as the mutex's own
+// reasoning) climbs until the container gets OOM-killed — taking down every active session, not
+// just this one. This is a hard ceiling on the entire call so one bad page can't do that.
+const OVERALL_TIMEOUT_MS = 90_000;
+
 /**
  * Some pre-provisioned sandboxes ship a browser build pinned to a different
  * Playwright version than this project depends on, exposed via a stable
@@ -83,6 +92,13 @@ async function runBrowserCheck(args: Record<string, unknown>, ctx: ToolContext):
 
   const browser = await chromium.launch({ executablePath: resolveExecutablePath() });
   const consoleMessages: string[] = [];
+
+  let timedOut = false;
+  const watchdog = setTimeout(() => {
+    timedOut = true;
+    void browser.close();
+  }, OVERALL_TIMEOUT_MS);
+
   try {
     const page = await browser.newPage();
     page.on("console", (msg) => {
@@ -140,7 +156,15 @@ async function runBrowserCheck(args: Record<string, unknown>, ctx: ToolContext):
     const result: ToolResult = { text };
     if (imageDataUrl) result.images = [imageDataUrl];
     return result;
+  } catch (err) {
+    if (timedOut) {
+      throw new Error(
+        `browser_check timed out after ${OVERALL_TIMEOUT_MS / 1000}s (an action — most likely "evaluate" — never returned) and was force-closed.`
+      );
+    }
+    throw err;
   } finally {
-    await browser.close();
+    clearTimeout(watchdog);
+    await browser.close().catch(() => {});
   }
 }
