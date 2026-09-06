@@ -27,6 +27,20 @@ export interface PendingConfirmation {
   question: string;
 }
 
+const MAX_LOGGED_ARGS_CHARS = 200;
+
+/** Redacted, length-capped one-liner of a tool call's args for the server's own stdout — long
+ *  enough to show e.g. a run_shell command or an edited file's path, short enough that a
+ *  write_file with a huge `content` field doesn't spam the log. */
+function summarizeToolArgs(args: Record<string, unknown>, secrets: string[]): string {
+  try {
+    const json = JSON.stringify(redactSecrets(args, secrets));
+    return json.length > MAX_LOGGED_ARGS_CHARS ? `${json.slice(0, MAX_LOGGED_ARGS_CHARS)}…` : json;
+  } catch {
+    return "";
+  }
+}
+
 export class Session {
   readonly id = randomUUID();
   readonly createdAt = Date.now();
@@ -95,8 +109,10 @@ export class Session {
         // Every past OOM investigation on this app had to reconstruct what was actually running
         // from memory graphs alone — Render's log stream never saw tool activity, only the
         // periodic memory-breakdown line. This line + the matching one below give the next
-        // incident an actual timeline to correlate against those graphs instead of guessing.
-        log.tool(`[session ${this.id.slice(0, 8)}] → ${name}`);
+        // incident an actual timeline to correlate against those graphs instead of guessing. The
+        // first crash this caught (a run_shell call) still left the actual command a mystery —
+        // logging a capped, redacted summary of the args too means the next one won't.
+        log.tool(`[session ${this.id.slice(0, 8)}] → ${name} ${summarizeToolArgs(args, this.secrets)}`);
         this.transcript.toolCall(name, args);
         this.send({ type: "tool_call", name, args, callId });
       },

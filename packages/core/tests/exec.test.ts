@@ -40,4 +40,18 @@ describe("execSandboxed", () => {
     });
     expect(result.stdout).toContain("DISTINCTIVE_TAIL_MARKER");
   });
+
+  it("caps a spawned Node process's own heap by default, so it can't OOM the whole container unchecked", async () => {
+    const result = await execSandboxed("echo $NODE_OPTIONS", { cwd: process.cwd(), timeoutSec: 5 });
+    expect(result.stdout.trim()).toBe("--max-old-space-size=300");
+  });
+
+  it("doesn't override a caller-provided NODE_OPTIONS", async () => {
+    const result = await execSandboxed("echo $NODE_OPTIONS", {
+      cwd: process.cwd(),
+      timeoutSec: 5,
+      env: { NODE_OPTIONS: "--stack-size=2000" },
+    });
+    expect(result.stdout.trim()).toBe("--stack-size=2000");
+  });
 });
