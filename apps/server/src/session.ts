@@ -50,6 +50,7 @@ export class Session {
   private readonly transcript = new TranscriptRecorder();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   private readonly secrets: string[];
+  private readonly toolCallStartedAt = new Map<string, number>();
 
   constructor(
     readonly repoRoot: string,
@@ -90,10 +91,23 @@ export class Session {
         this.send({ type: "assistant_delta", text: delta });
       },
       onToolCall: (name, args, callId) => {
+        this.toolCallStartedAt.set(callId, Date.now());
+        // Every past OOM investigation on this app had to reconstruct what was actually running
+        // from memory graphs alone — Render's log stream never saw tool activity, only the
+        // periodic memory-breakdown line. This line + the matching one below give the next
+        // incident an actual timeline to correlate against those graphs instead of guessing.
+        log.tool(`[session ${this.id.slice(0, 8)}] → ${name}`);
         this.transcript.toolCall(name, args);
         this.send({ type: "tool_call", name, args, callId });
       },
       onToolResult: (name, result, error, callId) => {
+        const startedAt = this.toolCallStartedAt.get(callId);
+        this.toolCallStartedAt.delete(callId);
+        const durationMs = startedAt ? Date.now() - startedAt : undefined;
+        log.tool(
+          `[session ${this.id.slice(0, 8)}] ← ${name} ${error ? "(error) " : ""}` +
+            (durationMs !== undefined ? `${durationMs}ms` : "")
+        );
         this.transcript.toolResult(name, result, error);
         this.send({ type: "tool_result", name, result, error, callId });
       },
