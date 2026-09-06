@@ -1,6 +1,15 @@
 import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
-import type { ToolDefinition, ToolResult } from "./types.js";
+import { createMutex } from "../../sandbox/mutex.js";
+import type { ToolContext, ToolDefinition, ToolResult } from "./types.js";
+
+// One headless Chromium at a time, server-wide — every PWA session shares this one process, and
+// each launch needs 150-300MB that Node's own memory accounting never sees (a separate OS
+// process). `isolatedResource` below already caps concurrency to one per batch within a single
+// turn, but says nothing about two different sessions each calling this around the same time;
+// without a process-wide cap, those launches can stack and push a memory-constrained container
+// over its limit even though each individual instance closes cleanly on its own.
+const chromiumLock = createMutex();
 
 // Above this, skip attaching the screenshot as an image (still saved to disk) rather than risk
 // a request a vision model's own size limit would reject outright.
@@ -61,73 +70,77 @@ export const browserCheckTool: ToolDefinition = {
   },
   requiresConfirmation: false,
   isolatedResource: true,
-  async run(args, ctx) {
-    const { chromium } = await import("playwright");
-    const url = String(args.url);
-    const actions = (args.actions as BrowserAction[] | undefined) ?? [];
-    const takeScreenshot = args.screenshot !== false;
-
-    const browser = await chromium.launch({ executablePath: resolveExecutablePath() });
-    const consoleMessages: string[] = [];
-    try {
-      const page = await browser.newPage();
-      page.on("console", (msg) => {
-        if (msg.type() === "error") consoleMessages.push(`[console.error] ${msg.text()}`);
-      });
-      page.on("pageerror", (err) => consoleMessages.push(`[pageerror] ${err.message}`));
-
-      await page.goto(url, { waitUntil: "load", timeout: 30_000 });
-
-      for (const action of actions) {
-        switch (action.type) {
-          case "goto":
-            await page.goto(String(action.value), { waitUntil: "load", timeout: 30_000 });
-            break;
-          case "click":
-            await page.click(String(action.selector), { timeout: 10_000 });
-            break;
-          case "fill":
-            await page.fill(String(action.selector), String(action.value ?? ""), { timeout: 10_000 });
-            break;
-          case "waitForSelector":
-            await page.waitForSelector(String(action.selector), { timeout: 10_000 });
-            break;
-          case "evaluate":
-            await page.evaluate(String(action.script));
-            break;
-        }
-      }
-
-      const title = await page.title();
-      let screenshotPath: string | null = null;
-      let imageDataUrl: string | null = null;
-      if (takeScreenshot) {
-        const dir = path.join(ctx.repoRoot, ".cjw", "screenshots");
-        await fs.mkdir(dir, { recursive: true });
-        screenshotPath = path.join(dir, `check-${Date.now()}.png`);
-        await page.screenshot({ path: screenshotPath, fullPage: true });
-        const bytes = await fs.readFile(screenshotPath);
-        if (bytes.byteLength <= MAX_SCREENSHOT_BYTES) {
-          imageDataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
-        }
-      }
-
-      const text = [
-        `Loaded ${url} — title: "${title}"`,
-        screenshotPath ? `Screenshot saved to ${path.relative(ctx.repoRoot, screenshotPath)}` : null,
-        consoleMessages.length ? `Console errors:\n${consoleMessages.join("\n")}` : "No console errors.",
-        takeScreenshot && !imageDataUrl
-          ? "(Screenshot too large to show directly — inspect the saved file instead.)"
-          : null,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      const result: ToolResult = { text };
-      if (imageDataUrl) result.images = [imageDataUrl];
-      return result;
-    } finally {
-      await browser.close();
-    }
+  run(args, ctx) {
+    return chromiumLock.run(() => runBrowserCheck(args, ctx));
   },
 };
+
+async function runBrowserCheck(args: Record<string, unknown>, ctx: ToolContext): Promise<string | ToolResult> {
+  const { chromium } = await import("playwright");
+  const url = String(args.url);
+  const actions = (args.actions as BrowserAction[] | undefined) ?? [];
+  const takeScreenshot = args.screenshot !== false;
+
+  const browser = await chromium.launch({ executablePath: resolveExecutablePath() });
+  const consoleMessages: string[] = [];
+  try {
+    const page = await browser.newPage();
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleMessages.push(`[console.error] ${msg.text()}`);
+    });
+    page.on("pageerror", (err) => consoleMessages.push(`[pageerror] ${err.message}`));
+
+    await page.goto(url, { waitUntil: "load", timeout: 30_000 });
+
+    for (const action of actions) {
+      switch (action.type) {
+        case "goto":
+          await page.goto(String(action.value), { waitUntil: "load", timeout: 30_000 });
+          break;
+        case "click":
+          await page.click(String(action.selector), { timeout: 10_000 });
+          break;
+        case "fill":
+          await page.fill(String(action.selector), String(action.value ?? ""), { timeout: 10_000 });
+          break;
+        case "waitForSelector":
+          await page.waitForSelector(String(action.selector), { timeout: 10_000 });
+          break;
+        case "evaluate":
+          await page.evaluate(String(action.script));
+          break;
+      }
+    }
+
+    const title = await page.title();
+    let screenshotPath: string | null = null;
+    let imageDataUrl: string | null = null;
+    if (takeScreenshot) {
+      const dir = path.join(ctx.repoRoot, ".cjw", "screenshots");
+      await fs.mkdir(dir, { recursive: true });
+      screenshotPath = path.join(dir, `check-${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      const bytes = await fs.readFile(screenshotPath);
+      if (bytes.byteLength <= MAX_SCREENSHOT_BYTES) {
+        imageDataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+      }
+    }
+
+    const text = [
+      `Loaded ${url} — title: "${title}"`,
+      screenshotPath ? `Screenshot saved to ${path.relative(ctx.repoRoot, screenshotPath)}` : null,
+      consoleMessages.length ? `Console errors:\n${consoleMessages.join("\n")}` : "No console errors.",
+      takeScreenshot && !imageDataUrl
+        ? "(Screenshot too large to show directly — inspect the saved file instead.)"
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const result: ToolResult = { text };
+    if (imageDataUrl) result.images = [imageDataUrl];
+    return result;
+  } finally {
+    await browser.close();
+  }
+}
