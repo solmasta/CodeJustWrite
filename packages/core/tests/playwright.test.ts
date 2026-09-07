@@ -77,7 +77,7 @@ describe("browser_check", () => {
       makeCtx()
     );
 
-    // The call is wrapped in the module's chromiumLock mutex and a dynamic import of "playwright",
+    // The call is wrapped in the shared heavyOperationLock mutex and a dynamic import of "playwright",
     // so its body (including the watchdog's own setTimeout) only starts running several microtask
     // ticks later — drain those before advancing the fake clock, or there's no timer registered
     // yet to fire. Generous iteration count since each tick is a no-op once things settle.
