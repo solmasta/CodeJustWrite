@@ -1,15 +1,7 @@
 import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
-import { createMutex } from "../../sandbox/mutex.js";
+import { heavyOperationLock } from "../../sandbox/heavyOpLock.js";
 import type { ToolContext, ToolDefinition, ToolResult } from "./types.js";
-
-// One headless Chromium at a time, server-wide — every PWA session shares this one process, and
-// each launch needs 150-300MB that Node's own memory accounting never sees (a separate OS
-// process). `isolatedResource` below already caps concurrency to one per batch within a single
-// turn, but says nothing about two different sessions each calling this around the same time;
-// without a process-wide cap, those launches can stack and push a memory-constrained container
-// over its limit even though each individual instance closes cleanly on its own.
-const chromiumLock = createMutex();
 
 // Above this, skip attaching the screenshot as an image (still saved to disk) rather than risk
 // a request a vision model's own size limit would reject outright.
@@ -18,10 +10,11 @@ const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 // page.goto and click/fill/waitForSelector each have their own timeout below, but page.evaluate
 // does not — an `evaluate` script that hangs (or a page with a runaway memory leak an action just
 // sits and waits on) can hold this open indefinitely. Since the whole call runs inside
-// chromiumLock, that also wedges every other session's browser_check behind it, and the leaking
-// Chromium process's memory (invisible to Node's own accounting, same as the mutex's own
-// reasoning) climbs until the container gets OOM-killed — taking down every active session, not
-// just this one. This is a hard ceiling on the entire call so one bad page can't do that.
+// heavyOperationLock, that also wedges every other session's browser_check *and* run_shell/
+// run_tests behind it, and the leaking Chromium process's memory (invisible to Node's own
+// accounting, same as the lock's own reasoning) climbs until the container gets OOM-killed —
+// taking down every active session, not just this one. This is a hard ceiling on the entire call
+// so one bad page can't do that.
 const OVERALL_TIMEOUT_MS = 90_000;
 
 /**
@@ -80,7 +73,7 @@ export const browserCheckTool: ToolDefinition = {
   requiresConfirmation: false,
   isolatedResource: true,
   run(args, ctx) {
-    return chromiumLock.run(() => runBrowserCheck(args, ctx));
+    return heavyOperationLock.run(() => runBrowserCheck(args, ctx));
   },
 };
 

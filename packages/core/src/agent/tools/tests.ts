@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execSandboxed } from "../../sandbox/exec.js";
+import { heavyOperationLock } from "../../sandbox/heavyOpLock.js";
 import { createTestWorktree } from "../../sandbox/workspace.js";
 import type { ToolDefinition } from "./types.js";
 
@@ -148,50 +149,56 @@ export const runTestsTool: ToolDefinition = {
   },
   requiresConfirmation: false,
   isolatedResource: true,
-  async run(args, ctx) {
-    const script = args.script ? String(args.script) : "test";
-    const wt = await createTestWorktree(ctx.repoRoot);
-    try {
-      const ecosystem = await detectEcosystem(wt.dir);
-      if (ecosystem === "rust") return await runRust(wt.dir);
-      if (ecosystem === "go") return await runGo(wt.dir);
-      if (ecosystem === "python") return await runPython(wt.dir);
-      if (ecosystem !== "node") {
-        return "No recognized project manifest found (package.json/Cargo.toml/go.mod/pyproject.toml/" +
-          "requirements.txt/setup.py) — nothing to run. Provide explicit shell commands via run_shell instead.";
-      }
-
-      const pkgManager = await detectPackageManager(wt.dir);
-      const install = await installDeps(wt.dir, pkgManager);
-      if (!install.ok) {
-        return `Dependency install failed in sandbox:\n${install.output}`;
-      }
-
-      const pkgJson = JSON.parse(await fs.readFile(path.join(wt.dir, "package.json"), "utf8")) as {
-        scripts?: Record<string, string>;
-      };
-      const scriptCommand = pkgJson.scripts?.[script];
-      const delegateDir = scriptCommand ? await findDelegateDir(wt.dir, scriptCommand) : null;
-      let delegateNote = "";
-      if (delegateDir) {
-        const delegatePkgManager = await detectPackageManager(delegateDir);
-        const delegateInstall = await installDeps(delegateDir, delegatePkgManager);
-        if (!delegateInstall.ok) {
-          return `Dependency install failed in sandbox (${path.relative(wt.dir, delegateDir)}):\n${delegateInstall.output}`;
+  run(args, ctx) {
+    // Serialized process-wide (see heavyOpLock.ts): dependency installs and test runs are the
+    // same kind of memory-heavy spawned work as run_shell and browser_check, just wrapped in a
+    // worktree — two sessions' test runs can't be allowed to stack any more than their shell
+    // commands can.
+    return heavyOperationLock.run(async () => {
+      const script = args.script ? String(args.script) : "test";
+      const wt = await createTestWorktree(ctx.repoRoot);
+      try {
+        const ecosystem = await detectEcosystem(wt.dir);
+        if (ecosystem === "rust") return await runRust(wt.dir);
+        if (ecosystem === "go") return await runGo(wt.dir);
+        if (ecosystem === "python") return await runPython(wt.dir);
+        if (ecosystem !== "node") {
+          return "No recognized project manifest found (package.json/Cargo.toml/go.mod/pyproject.toml/" +
+            "requirements.txt/setup.py) — nothing to run. Provide explicit shell commands via run_shell instead.";
         }
-        delegateNote = `, installed ${path.relative(wt.dir, delegateDir)} deps via ${delegatePkgManager}`;
-      }
 
-      const runCmd = pkgManager === "npm" ? `npm run ${script}` : `${pkgManager} ${script}`;
-      const result = await execSandboxed(runCmd, { cwd: wt.dir, timeoutSec: 600 });
-      const status = result.timedOut ? "TIMED OUT" : `exit code ${result.code}`;
-      return [
-        `Ran '${script}' via ${pkgManager} in sandbox worktree${delegateNote} (${status})`,
-        result.stdout,
-        result.stderr,
-      ].join("\n");
-    } finally {
-      await wt.cleanup();
-    }
+        const pkgManager = await detectPackageManager(wt.dir);
+        const install = await installDeps(wt.dir, pkgManager);
+        if (!install.ok) {
+          return `Dependency install failed in sandbox:\n${install.output}`;
+        }
+
+        const pkgJson = JSON.parse(await fs.readFile(path.join(wt.dir, "package.json"), "utf8")) as {
+          scripts?: Record<string, string>;
+        };
+        const scriptCommand = pkgJson.scripts?.[script];
+        const delegateDir = scriptCommand ? await findDelegateDir(wt.dir, scriptCommand) : null;
+        let delegateNote = "";
+        if (delegateDir) {
+          const delegatePkgManager = await detectPackageManager(delegateDir);
+          const delegateInstall = await installDeps(delegateDir, delegatePkgManager);
+          if (!delegateInstall.ok) {
+            return `Dependency install failed in sandbox (${path.relative(wt.dir, delegateDir)}):\n${delegateInstall.output}`;
+          }
+          delegateNote = `, installed ${path.relative(wt.dir, delegateDir)} deps via ${delegatePkgManager}`;
+        }
+
+        const runCmd = pkgManager === "npm" ? `npm run ${script}` : `${pkgManager} ${script}`;
+        const result = await execSandboxed(runCmd, { cwd: wt.dir, timeoutSec: 600 });
+        const status = result.timedOut ? "TIMED OUT" : `exit code ${result.code}`;
+        return [
+          `Ran '${script}' via ${pkgManager} in sandbox worktree${delegateNote} (${status})`,
+          result.stdout,
+          result.stderr,
+        ].join("\n");
+      } finally {
+        await wt.cleanup();
+      }
+    });
   },
 };

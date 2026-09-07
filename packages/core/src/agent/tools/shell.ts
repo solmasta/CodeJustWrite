@@ -1,4 +1,5 @@
 import { execSandboxed } from "../../sandbox/exec.js";
+import { heavyOperationLock } from "../../sandbox/heavyOpLock.js";
 import type { ToolDefinition } from "./types.js";
 
 export const runShellTool: ToolDefinition = {
@@ -15,17 +16,23 @@ export const runShellTool: ToolDefinition = {
     },
   },
   requiresConfirmation: true,
-  async run(args, ctx) {
-    const command = String(args.command);
-    const result = await execSandboxed(command, {
-      cwd: ctx.repoRoot,
-      timeoutSec: ctx.config.shellTimeoutSec,
+  run(args, ctx) {
+    // Serialized process-wide (see heavyOpLock.ts): an arbitrary shell command — an npm
+    // install, a build — can use as much real RSS as its own --max-old-space-size cap allows,
+    // on top of everything else already running in this container, so two sessions' commands
+    // can't be allowed to stack.
+    return heavyOperationLock.run(async () => {
+      const command = String(args.command);
+      const result = await execSandboxed(command, {
+        cwd: ctx.repoRoot,
+        timeoutSec: ctx.config.shellTimeoutSec,
+      });
+      const status = result.timedOut
+        ? `TIMED OUT after ${ctx.config.shellTimeoutSec}s`
+        : `exit code ${result.code}`;
+      return [`$ ${command}`, `(${status})`, "--- stdout ---", result.stdout, "--- stderr ---", result.stderr].join(
+        "\n"
+      );
     });
-    const status = result.timedOut
-      ? `TIMED OUT after ${ctx.config.shellTimeoutSec}s`
-      : `exit code ${result.code}`;
-    return [`$ ${command}`, `(${status})`, "--- stdout ---", result.stdout, "--- stderr ---", result.stderr].join(
-      "\n"
-    );
   },
 };
