@@ -20,6 +20,17 @@ export interface ExecOptions {
 // subsequent turn of the conversation.
 const DEFAULT_MAX_OUTPUT_BYTES = 100_000;
 
+// timeoutSec bounds wall-clock time, but nothing here bounds memory — a spawned command that
+// balloons in RAM (an npm install/build, a test runner, whatever run_shell was told to run) can
+// grow unchecked until it OOM-kills the whole container, taking the server process and every
+// other active session down with it, well before its own timeout would ever fire. This can't
+// cap non-JS memory (native buffers, other languages), but capping the *V8 heap* of a spawned
+// command that happens to be — or itself spawns — a Node process (true for most installs/builds/
+// test runners in this app) is the single highest-leverage guard available here. Only applied
+// when the caller hasn't already set NODE_OPTIONS, and it's inherited by any Node process a
+// script spawns in turn (e.g. an npm script's own child processes).
+const DEFAULT_NODE_OPTIONS = "--max-old-space-size=300";
+
 /**
  * Runs a command as a constrained subprocess: bounded wall-clock timeout,
  * truncated output, and optional env overrides. Uses spawn with array args
@@ -52,11 +63,17 @@ export function execSandboxed(
 
   const { cwd, timeoutSec, env, maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES } = options;
   const timeoutMs = timeoutSec * 1000;
+  const mergedEnv = { ...process.env, ...env };
+  // Check the caller's own explicit override, not the merged env — the latter also carries
+  // whatever NODE_OPTIONS this server's own host process happens to be running under, which would
+  // otherwise silently defeat the cap for every single spawned command without any caller ever
+  // having actually asked for that.
+  if (!env?.NODE_OPTIONS) mergedEnv.NODE_OPTIONS = DEFAULT_NODE_OPTIONS;
 
   return new Promise((resolve) => {
-    const child = args 
-      ? spawn(command, args, { cwd, env: { ...process.env, ...env } })
-      : spawn(command, { cwd, shell: true, env: { ...process.env, ...env } });
+    const child = args
+      ? spawn(command, args, { cwd, env: mergedEnv })
+      : spawn(command, { cwd, shell: true, env: mergedEnv });
 
     let stdout = "";
     let stderr = "";
