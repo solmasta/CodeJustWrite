@@ -79,6 +79,7 @@ export async function runRepl(config: CjwConfig): Promise<void> {
   const agent = new Agent({
     getProvider: () => registry.get(state.provider),
     getModel: () => state.model,
+    getFallbackModel: () => defaultModelFor(state.provider),
     ctx,
     tools: [...allTools, ...mcp.tools],
     systemPrompt: buildSystemPrompt(state.promptPreset, state.customInstructions),

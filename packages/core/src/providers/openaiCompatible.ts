@@ -1,12 +1,13 @@
 import OpenAI from "openai";
-import type {
-  ChatMessage,
-  CompletionResult,
-  LLMProvider,
-  ModelInfo,
-  StreamHandlers,
-  ToolCall,
-  ToolSpec,
+import {
+  ModelUnavailableError,
+  type ChatMessage,
+  type CompletionResult,
+  type LLMProvider,
+  type ModelInfo,
+  type StreamHandlers,
+  type ToolCall,
+  type ToolSpec,
 } from "./types.js";
 
 export function toOpenAIMessages(messages: ChatMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
@@ -73,15 +74,28 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
       model: string,
       handlers?: StreamHandlers
     ): Promise<CompletionResult> {
-      const stream = await client.chat.completions.create(
-        {
-          model,
-          messages: toOpenAIMessages(messages),
-          tools: tools.length ? toOpenAITools(tools) : undefined,
-          stream: true,
-        },
-        handlers?.timeoutMs !== undefined ? { timeout: handlers.timeoutMs } : undefined
-      );
+      let stream;
+      try {
+        stream = await client.chat.completions.create(
+          {
+            model,
+            messages: toOpenAIMessages(messages),
+            tools: tools.length ? toOpenAITools(tools) : undefined,
+            stream: true,
+          },
+          handlers?.timeoutMs !== undefined ? { timeout: handlers.timeoutMs } : undefined
+        );
+      } catch (err) {
+        // 404 covers a model slug that's gone entirely or, as happened in production, a ":free"
+        // variant whose free tier the provider pulled out from under it without warning; 429
+        // covers the free tier's own rate limit. Both are "this model, right now, isn't usable"
+        // rather than a real request/auth/network problem — tagged distinctly so the agent loop
+        // can treat them as "try a different model" instead of just failing the turn outright.
+        if (err instanceof OpenAI.APIError && (err.status === 404 || err.status === 429)) {
+          throw new ModelUnavailableError(err.message, err.status);
+        }
+        throw err;
+      }
 
       let content = "";
       const toolCallsById = new Map<number, { id: string; name: string; args: string }>();

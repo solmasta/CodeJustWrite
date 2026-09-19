@@ -97,6 +97,11 @@ export class Session {
     this.agent = new Agent({
       getProvider: () => this.registry.get(this.provider),
       getModel: () => this.model,
+      // The current provider's own default model — reasonable to assume that one stays available
+      // even when whatever's configured (a ":free" slug especially) doesn't. Agent itself skips
+      // the fallback when this equals the configured model already, so no special-casing needed
+      // here for the case where they're the same.
+      getFallbackModel: () => defaultModelFor(this.provider),
       ctx,
       tools: [...allTools, ...mcpTools],
       systemPrompt: buildSystemPrompt(this.promptPreset, this.customInstructions),
