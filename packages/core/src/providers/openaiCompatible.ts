@@ -73,12 +73,15 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
       model: string,
       handlers?: StreamHandlers
     ): Promise<CompletionResult> {
-      const stream = await client.chat.completions.create({
-        model,
-        messages: toOpenAIMessages(messages),
-        tools: tools.length ? toOpenAITools(tools) : undefined,
-        stream: true,
-      });
+      const stream = await client.chat.completions.create(
+        {
+          model,
+          messages: toOpenAIMessages(messages),
+          tools: tools.length ? toOpenAITools(tools) : undefined,
+          stream: true,
+        },
+        handlers?.timeoutMs !== undefined ? { timeout: handlers.timeoutMs } : undefined
+      );
 
       let content = "";
       const toolCallsById = new Map<number, { id: string; name: string; args: string }>();
