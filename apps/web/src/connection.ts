@@ -3,6 +3,12 @@ import { apiBase } from "./utils";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "reconnecting" | "failed";
 
+/** For "reconnecting"/"disconnected", the 1-indexed attempt currently in flight (or about to
+ *  schedule) out of maxAttempts — lets the caller show live progress ("attempt 3 of 10") instead
+ *  of a generic status with no sense of whether it's actually still trying or how much longer it
+ *  might take. Meaningless (always 0) for "connecting"/"connected"/"failed". */
+export type StatusChangeHandler = (status: ConnectionStatus, attempt: number, maxAttempts: number) => void;
+
 export interface ConnectionManager {
   send: (data: unknown) => void;
   close: () => void;
@@ -23,7 +29,7 @@ export interface ConnectionManager {
 export function createConnection(
   sessionId: string,
   settings: Settings,
-  onStatusChange: (status: ConnectionStatus) => void
+  onStatusChange: StatusChangeHandler
 ): ConnectionManager {
   let socket: WebSocket | null = null;
   const messageQueue: string[] = [];
@@ -46,14 +52,14 @@ export function createConnection(
   function connect(): void {
     if (socket?.readyState === WebSocket.OPEN) return;
     
-    onStatusChange(reconnectAttempts > 0 ? "reconnecting" : "connecting");
+    onStatusChange(reconnectAttempts > 0 ? "reconnecting" : "connecting", reconnectAttempts + 1, maxReconnectAttempts);
     
     const wsUrl = `${apiBase(settings).replace(/^http/, "ws")}/ws?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(settings.token)}`;
     socket = new WebSocket(wsUrl);
     
     socket.onopen = () => {
       reconnectAttempts = 0;
-      onStatusChange("connected");
+      onStatusChange("connected", 0, maxReconnectAttempts);
       openHandler?.();
       
       while (messageQueue.length) {
@@ -76,13 +82,13 @@ export function createConnection(
       closeHandler?.();
 
       if (reconnectAttempts < maxReconnectAttempts) {
-        onStatusChange("disconnected");
+        onStatusChange("disconnected", reconnectAttempts + 1, maxReconnectAttempts);
         reconnectAttempts++;
         reconnectTimer = setTimeout(connect, getDelay());
       } else {
         // Given up — most likely the session no longer exists server-side
         // (e.g. the server restarted). Retrying further won't help.
-        onStatusChange("failed");
+        onStatusChange("failed", reconnectAttempts, maxReconnectAttempts);
       }
     };
     

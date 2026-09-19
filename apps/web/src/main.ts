@@ -82,6 +82,11 @@ let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+/** The single system bubble for the outage currently in progress, if any — updated in place on
+ *  every retry instead of a fresh bubble per attempt (a cold-start reconnect can take several
+ *  attempts over a minute or more; six identical "Connection lost" bubbles stacking up told the
+ *  user nothing about whether it was still trying or already dead). Cleared once reconnected. */
+let reconnectBubble: HTMLDivElement | null = null;
 
 /** Cancels any pending debounced draft save — must run alongside every clearDraft() call, or a
  *  save scheduled just before the clear (e.g. typing right up to hitting Send) can still fire
@@ -258,16 +263,21 @@ function backToRepoPicker(): void {
 
 function connectWebSocket(sessionId: string): void {
   connection?.close();
+  // A leftover reference from a prior connection's outage (already detached from the DOM once
+  // e.g. backToRepoPicker clears chatHistory) must not be silently reused here — the first outage
+  // on this new connection needs a real, visible bubble, not a write into a node nobody can see.
+  reconnectBubble = null;
 
-  connection = createConnection(sessionId, settings, (status) => {
+  connection = createConnection(sessionId, settings, (status, attempt, maxAttempts) => {
     if (status === "failed") {
       connectionStatus.className = "connection-status disconnected";
       connectionStatus.textContent = "Session lost";
-      addBubble(
-        "system",
-        "Couldn't reconnect to this session — it may no longer exist on the server. " +
-          "Open Settings (⚙) → Change Repository to start a new one."
-      );
+      const message =
+        "Couldn't reconnect after several tries — it may no longer exist on the server. " +
+        "Open Settings (⚙) → Change Repository to start a new one.";
+      if (reconnectBubble) reconnectBubble.textContent = message;
+      else addBubble("system", message);
+      reconnectBubble = null;
       return;
     }
     connectionStatus.className = `connection-status ${status}`;
@@ -275,8 +285,24 @@ function connectWebSocket(sessionId: string): void {
 
     if (status === "connected") {
       typingIndicator.classList.add("hidden");
-    } else if (status === "disconnected") {
-      addBubble("system", "Connection lost. Attempting to reconnect…");
+      // Only worth a word if the user actually saw an outage — a normal first connect on session
+      // start has no reconnectBubble to close out.
+      if (reconnectBubble) {
+        reconnectBubble.textContent = "Reconnected.";
+        reconnectBubble = null;
+      }
+    } else if (status === "disconnected" || status === "reconnecting") {
+      // The free-hosting-tier reality this is usually caused by: a server that's been asleep can
+      // take a while to wake back up, so set that expectation instead of leaving "attempting to
+      // reconnect" looking stuck with no sense of progress or whether it'll ever succeed.
+      const message =
+        `Connection lost. Reconnecting… (attempt ${attempt} of ${maxAttempts} — ` +
+        "can take up to a minute or so if the server was asleep.)";
+      if (reconnectBubble) {
+        reconnectBubble.textContent = message;
+      } else {
+        reconnectBubble = addBubble("system", message);
+      }
     }
   });
 
