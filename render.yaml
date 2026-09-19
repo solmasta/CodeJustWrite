@@ -21,7 +21,7 @@ services:
       - key: CJW_DEFAULT_PROVIDER
         value: openrouter
       - key: CJW_DEFAULT_MODEL
-        value: cohere/north-mini-code:free
+        value: openai/gpt-oss-120b:free
       - key: CJW_SESSION_TTL_MIN
         value: "120"
       - key: CJW_MAX_SESSIONS

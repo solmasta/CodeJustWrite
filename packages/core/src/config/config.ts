@@ -18,7 +18,7 @@ export interface CjwConfig {
 
 const DEFAULT_MODELS: Record<ProviderName, string> = {
   deepinfra: "moonshotai/Kimi-K3",
-  openrouter: "cohere/north-mini-code:free",
+  openrouter: "openai/gpt-oss-120b:free",
 };
 
 export function loadConfig(): CjwConfig {

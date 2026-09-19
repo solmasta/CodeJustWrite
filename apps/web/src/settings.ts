@@ -10,7 +10,7 @@ const defaults: Settings = {
   repoUrl: "",
   branch: "",
   provider: "openrouter",
-  model: "cohere/north-mini-code:free",
+  model: "openai/gpt-oss-120b:free",
   autoApprove: true,
   recentRepos: [],
   promptPreset: "default",
