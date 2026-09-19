@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChatMessage, LLMProvider } from "../providers/types.js";
+import { ModelUnavailableError, type ChatMessage, type LLMProvider } from "../providers/types.js";
 import { allTools } from "./tools/index.js";
 import type { ToolContext, ToolDefinition } from "./tools/index.js";
 import { parseFakeToolCall } from "./fakeToolCall.js";
@@ -33,6 +33,13 @@ function messageBytes(m: ChatMessage): number {
 export interface AgentDeps {
   getProvider: () => LLMProvider;
   getModel: () => string;
+  /** A different model (same provider) to retry against, once, when the configured model itself
+   *  turns out to be the problem (see ModelUnavailableError) — a ":free" slug the provider pulled
+   *  overnight, or a free-tier rate limit. Omit to just let that failure end the turn as before;
+   *  return the same value as getModel() (or anything falsy) to skip the fallback for a given
+   *  call, e.g. when the configured model already *is* the fallback and retrying it would be
+   *  pointless. */
+  getFallbackModel?: () => string | null | undefined;
   ctx: ToolContext;
   /** Defaults to the built-in tool set (git/shell/tests/browser/PR). Pass a superset — e.g.
    *  [...allTools, ...mcpTools] — to add tools from connected MCP servers. */
@@ -126,14 +133,38 @@ export class Agent {
     this.maybeCompactHistory();
 
     let finalText = "";
+    // Once the configured model has proven unavailable mid-turn and a fallback call has actually
+    // succeeded, keep using that fallback for the rest of *this* turn's iterations too — no point
+    // re-discovering the same failure every loop iteration. The next send() (next user message)
+    // goes back to trying the configured model fresh, in case it's back by then.
+    let modelOverride: string | null = null;
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       const provider = this.deps.getProvider();
-      const model = this.deps.getModel();
+      const model: string = modelOverride ?? this.deps.getModel();
 
-      const result = await provider.complete(this.history, this.tools.map((t) => t.spec), model, {
-        onTextDelta: this.deps.onTextDelta,
-      });
+      let result;
+      try {
+        result = await provider.complete(this.history, this.tools.map((t) => t.spec), model, {
+          onTextDelta: this.deps.onTextDelta,
+        });
+      } catch (err) {
+        const fallbackModel: string | null | undefined = modelOverride ? null : this.deps.getFallbackModel?.();
+        if (!(err instanceof ModelUnavailableError) || !fallbackModel || fallbackModel === model) {
+          throw err;
+        }
+        // Announce the substitution as real assistant text (via onTextDelta, the same path every
+        // other token reaches the UI/transcript through) rather than baking it into the return
+        // value — nothing downstream actually renders send()'s return value on its own; the
+        // visible reply is built entirely from streamed deltas.
+        this.deps.onTextDelta?.(
+          `_(${model} is unavailable right now — falling back to ${fallbackModel} for this reply.)_\n\n`
+        );
+        modelOverride = fallbackModel;
+        result = await provider.complete(this.history, this.tools.map((t) => t.spec), fallbackModel, {
+          onTextDelta: this.deps.onTextDelta,
+        });
+      }
 
       this.history.push(result.message);
 

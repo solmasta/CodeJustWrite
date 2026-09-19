@@ -41,6 +41,21 @@ export interface ModelInfo {
   id: string;
 }
 
+/** Thrown by a provider's complete() when the *model itself* is the problem — not found/no
+ *  longer offered (404, e.g. a ":free" slug OpenRouter pulled the free tier of), or rate-limited
+ *  (429) — as opposed to a network failure, an auth problem, or a bad request, none of which
+ *  switching models would fix. The agent loop uses this specifically to decide whether falling
+ *  back to a different model is a sane response to a given failure. */
+export class ModelUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ModelUnavailableError";
+  }
+}
+
 export interface LLMProvider {
   readonly name: string;
   complete(

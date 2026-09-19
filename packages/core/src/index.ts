@@ -6,6 +6,7 @@ export { allTools, toolsByName } from "./agent/tools/index.js";
 export type { ToolDefinition, ToolContext } from "./agent/tools/index.js";
 
 export { ProviderRegistry } from "./providers/registry.js";
+export { ModelUnavailableError } from "./providers/types.js";
 export type {
   ChatMessage,
   LLMProvider,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Agent } from "../src/agent/agent.js";
+import { ModelUnavailableError } from "../src/providers/types.js";
 import type { ChatMessage, CompletionResult, LLMProvider, ModelInfo, StreamHandlers, ToolSpec } from "../src/providers/types.js";
 import type { ToolContext, ToolDefinition } from "../src/agent/tools/types.js";
 
@@ -500,5 +501,121 @@ describe("Agent.maybeCompactHistory", () => {
     await agent.send("go");
 
     expect(agent.getHistory()[0]).toEqual(systemBefore);
+  });
+});
+
+describe("Agent falling back to a different model when the configured one is unavailable", () => {
+  /** Fails with ModelUnavailableError for any model in `unavailableModels`; otherwise returns the
+   *  next scripted response. Records which model each call was actually made with, so a test can
+   *  assert the retry really did switch models rather than just succeeding for other reasons. */
+  class ModelAwareProvider implements LLMProvider {
+    readonly name = "model-aware";
+    calls: string[] = [];
+    constructor(
+      private readonly unavailableModels: Set<string>,
+      private readonly responses: CompletionResult[]
+    ) {}
+
+    async complete(_messages: ChatMessage[], _tools: ToolSpec[], model: string): Promise<CompletionResult> {
+      this.calls.push(model);
+      if (this.unavailableModels.has(model)) {
+        throw new ModelUnavailableError(`${model} is unavailable`, 404);
+      }
+      const response = this.responses.shift();
+      if (!response) throw new Error("ModelAwareProvider ran out of scripted responses");
+      return response;
+    }
+
+    async listModels(): Promise<ModelInfo[]> {
+      return [];
+    }
+  }
+
+  it("retries once against the fallback model and returns its reply, announcing the switch first", async () => {
+    const provider = new ModelAwareProvider(
+      new Set(["primary-model"]),
+      [{ message: { role: "assistant", content: "Fallback answered this." }, finishReason: "stop" }]
+    );
+    const deltas: string[] = [];
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "primary-model",
+      getFallbackModel: () => "fallback-model",
+      ctx: makeCtx(),
+      tools: [],
+      onTextDelta: (d) => deltas.push(d),
+    });
+
+    const finalText = await agent.send("hello");
+
+    expect(provider.calls).toEqual(["primary-model", "fallback-model"]);
+    expect(finalText).toBe("Fallback answered this.");
+    // The substitution notice must reach the client the same way any other token does (onTextDelta)
+    // — nothing renders send()'s return value directly, so baking it in there alone would be invisible.
+    expect(deltas[0]).toContain("primary-model is unavailable");
+    expect(deltas[0]).toContain("fallback-model");
+  });
+
+  it("propagates the original error when no fallback model is configured", async () => {
+    const provider = new ModelAwareProvider(new Set(["primary-model"]), []);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "primary-model",
+      // no getFallbackModel
+      ctx: makeCtx(),
+      tools: [],
+    });
+
+    await expect(agent.send("hello")).rejects.toThrow("primary-model is unavailable");
+    expect(provider.calls).toEqual(["primary-model"]);
+  });
+
+  it("does not retry when the fallback model is the same as the one that just failed", async () => {
+    const provider = new ModelAwareProvider(new Set(["only-model"]), []);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "only-model",
+      getFallbackModel: () => "only-model",
+      ctx: makeCtx(),
+      tools: [],
+    });
+
+    await expect(agent.send("hello")).rejects.toThrow(ModelUnavailableError);
+    // Only the one attempt — retrying against the identical model that just failed is pointless.
+    expect(provider.calls).toEqual(["only-model"]);
+  });
+
+  it("keeps using the fallback for the rest of the turn's iterations without re-trying the primary", async () => {
+    const listDirTool: ToolDefinition = {
+      spec: { name: "list_dir", description: "list", parameters: { type: "object", properties: {} } },
+      async run() {
+        return "src, tests";
+      },
+    };
+    const provider = new ModelAwareProvider(new Set(["primary-model"]), [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          toolCalls: [{ id: "c1", name: "list_dir", arguments: "{}" }],
+        },
+        finishReason: "tool_calls",
+      },
+      { message: { role: "assistant", content: "Done." }, finishReason: "stop" },
+    ]);
+    const agent = new Agent({
+      getProvider: () => provider,
+      getModel: () => "primary-model",
+      getFallbackModel: () => "fallback-model",
+      ctx: makeCtx(),
+      tools: [listDirTool],
+    });
+
+    const finalText = await agent.send("list the repo");
+
+    // primary fails once, then every subsequent call in this turn goes straight to the fallback —
+    // no second attempt against primary-model for the tool-calling loop's next iteration.
+    expect(provider.calls).toEqual(["primary-model", "fallback-model", "fallback-model"]);
+    expect(finalText).toBe("Done.");
   });
 });

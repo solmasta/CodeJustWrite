@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createOpenAICompatibleProvider, toOpenAIMessages } from "../src/providers/openaiCompatible.js";
+import { ModelUnavailableError } from "../src/providers/types.js";
 
 describe("toOpenAIMessages", () => {
   it("serializes a user message's images as multimodal content parts alongside the text", () => {
@@ -106,4 +107,63 @@ describe("createOpenAICompatibleProvider complete", () => {
       expect(() => JSON.parse(result.message.toolCalls![0].arguments)).not.toThrow();
     }
   );
+
+  it(
+    // Reproduces the exact live failure: OpenRouter pulling a ":free" slug's free tier returns a
+    // plain 404 with a message like "This model is unavailable for free. ... use this slug
+    // instead: openai/gpt-oss-120b" — the agent loop needs a typed signal to tell "the model is
+    // the problem" apart from any other failure, so it knows falling back to a different model is
+    // actually a sane response to this one.
+    "translates a 404 (model gone/unavailable-for-free) into a ModelUnavailableError",
+    async () => {
+      server = createServer((req, res) => {
+        res.statusCode = 404;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ error: { message: "This model is unavailable for free." } }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      baseURL = `http://127.0.0.1:${port}`;
+
+      const provider = createOpenAICompatibleProvider({ name: "test", apiKey: "test-key", baseURL });
+      const call = provider.complete([{ role: "user", content: "hi" }], [], "some/pulled-model:free");
+
+      await expect(call).rejects.toBeInstanceOf(ModelUnavailableError);
+      await expect(call).rejects.toMatchObject({ status: 404 });
+    }
+  );
+
+  it("translates a 429 (rate limited) into a ModelUnavailableError too", async () => {
+    server = createServer((req, res) => {
+      res.statusCode = 429;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "Rate limit exceeded" } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    baseURL = `http://127.0.0.1:${port}`;
+
+    const provider = createOpenAICompatibleProvider({ name: "test", apiKey: "test-key", baseURL });
+    const call = provider.complete([{ role: "user", content: "hi" }], [], "some-model:free");
+
+    await expect(call).rejects.toBeInstanceOf(ModelUnavailableError);
+    await expect(call).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("leaves an unrelated failure (e.g. 401) as a plain error, not a ModelUnavailableError", async () => {
+    server = createServer((req, res) => {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "Invalid API key" } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    baseURL = `http://127.0.0.1:${port}`;
+
+    const provider = createOpenAICompatibleProvider({ name: "test", apiKey: "bad-key", baseURL });
+    const call = provider.complete([{ role: "user", content: "hi" }], [], "some-model");
+
+    // An auth failure isn't fixable by switching models — the agent loop must not treat it as one.
+    await expect(call).rejects.not.toBeInstanceOf(ModelUnavailableError);
+  });
 });
