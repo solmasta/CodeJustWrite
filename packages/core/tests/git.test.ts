@@ -183,6 +183,27 @@ describe("git tools", () => {
     expect(files).toContain("feature.txt");
   });
 
+  it("git_fetch then git_merge (no git_checkout in between) merges a branch that's only a remote-tracking ref", async () => {
+    // The tool's own description promises a branch that's "already local or fetched" is
+    // mergeable — this is the fetched-but-never-checked-out-locally half of that promise, which
+    // a bare `git merge <branch>` can't satisfy on its own since only refs/remotes/origin/<branch>
+    // exists yet, not refs/heads/<branch>.
+    const clone = await initSingleBranchClone();
+    const ctx = makeCtx(clone);
+
+    await gitFetchTool.run({ branch: "feature" }, ctx);
+    const localRef = await execSandboxed("git rev-parse -q --verify refs/heads/feature", {
+      cwd: clone,
+      timeoutSec: 10,
+    });
+    expect(localRef.code).not.toBe(0); // confirms this really is the fetched-only case
+
+    const mergeOutput = await gitMergeTool.run({ branch: "feature" }, ctx);
+    expect(mergeOutput).toBeDefined();
+    const files = await fs.readdir(clone);
+    expect(files).toContain("feature.txt");
+  });
+
   it("git_checkout reports a clear error for a branch that hasn't been fetched", async () => {
     const clone = await initSingleBranchClone();
     const ctx = makeCtx(clone);

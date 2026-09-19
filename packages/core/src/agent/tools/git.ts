@@ -298,7 +298,23 @@ export const gitMergeTool: ToolDefinition = {
   async run(args, ctx) {
     const branch = sanitizeBranch(String(args.branch));
     if (!branch) throw new Error("Invalid branch name");
-    let result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
+
+    // Mirrors git_checkout's own resolution order (local branch first, then a fetched
+    // origin/<branch> remote-tracking ref): this tool's own description promises a branch that's
+    // "already local or fetched" is mergeable, but a bare `git merge <branch>` only ever resolves
+    // a *local* branch — a branch that was git_fetch'd and never also git_checkout'd (so only
+    // refs/remotes/origin/<branch> exists, no local refs/heads/<branch>) fails with a confusing
+    // "not something we can merge" instead of actually merging. Only overrides when that
+    // remote-tracking ref actually resolves, so a caller that already passed an explicit
+    // "origin/<branch>" (or any other already-qualified ref) is left alone rather than double-prefixed.
+    let mergeRef = branch;
+    const localRef = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`]);
+    if (localRef.code !== 0) {
+      const remoteRef = await git(ctx.repoRoot, ["rev-parse", "-q", "--verify", `refs/remotes/origin/${branch}`]);
+      if (remoteRef.code === 0) mergeRef = `origin/${branch}`;
+    }
+
+    let result = await git(ctx.repoRoot, ["merge", "--no-edit", mergeRef]);
 
     // Sessions clone shallowly (see apps/server/src/session.ts), so merging any branch whose
     // real common ancestor with the current branch falls outside that shallow window fails here
@@ -309,7 +325,7 @@ export const gitMergeTool: ToolDefinition = {
       if (isShallow.stdout.trim() === "true") {
         const unshallow = await git(ctx.repoRoot, ["fetch", "--unshallow", "origin"], 300);
         if (unshallow.code === 0) {
-          result = await git(ctx.repoRoot, ["merge", "--no-edit", branch]);
+          result = await git(ctx.repoRoot, ["merge", "--no-edit", mergeRef]);
         }
       }
     }
