@@ -68,3 +68,42 @@ describe("createOpenAICompatibleProvider listModels", () => {
     ]);
   });
 });
+
+describe("createOpenAICompatibleProvider complete", () => {
+  let server: Server;
+  let baseURL: string;
+
+  afterAll(() => {
+    server?.close();
+  });
+
+  it(
+    // Reproduces a real production failure: a no-arg tool call (git_status's schema has zero
+    // parameters) whose streamed delta never includes an `arguments` chunk at all — some models
+    // simply never emit one for an empty schema — must still come back as "{}", not "", or this
+    // exact tool call breaks the *next* turn's request when it's replayed as history (the
+    // provider rejects an empty-string `arguments` as invalid JSON).
+    "defaults a tool call's arguments to '{}' when the model never streams any arguments chunk",
+    async () => {
+      server = createServer((req, res) => {
+        res.setHeader("content-type", "text/event-stream");
+        const chunks = [
+          { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "git_status" } }] } }] },
+          { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+        ];
+        for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\n\n`);
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      baseURL = `http://127.0.0.1:${port}`;
+
+      const provider = createOpenAICompatibleProvider({ name: "test", apiKey: "test-key", baseURL });
+      const result = await provider.complete([{ role: "user", content: "status?" }], [], "test-model");
+
+      expect(result.message.toolCalls).toEqual([{ id: "call_1", name: "git_status", arguments: "{}" }]);
+      expect(() => JSON.parse(result.message.toolCalls![0].arguments)).not.toThrow();
+    }
+  );
+});

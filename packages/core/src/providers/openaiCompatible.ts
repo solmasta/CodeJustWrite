@@ -118,7 +118,14 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
 
       const toolCalls: ToolCall[] = [...toolCallsById.values()]
         .filter((tc) => tc.name)
-        .map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.args }));
+        // A tool with no parameters (e.g. git_status's schema is `{type:"object",properties:{}}`)
+        // can have a model stream zero `arguments` delta chunks for it at all, leaving `args` at
+        // its initial "" — not the same as "{}". That's fine locally (agent.ts's parseArgs()
+        // treats a falsy raw string as {}), but this exact message also gets replayed back to the
+        // provider as conversation history on the *next* turn, and "" isn't valid JSON — the
+        // provider then rejects the whole next request with a 400 ("malformed JSON arguments"),
+        // breaking every tool with an empty parameter schema after its first successful call.
+        .map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.args || "{}" }));
 
       return {
         message: {
