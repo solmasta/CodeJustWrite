@@ -254,7 +254,11 @@ export class Session {
           { role: "user", content: conversation },
         ],
         [],
-        this.model
+        this.model,
+        // Same reasoning as listModels' own timeout: this backs a UI action (the export button)
+        // someone is actively waiting on synchronously, not the main agent loop — fail fast
+        // instead of leaving it stuck on the SDK's default 10-minute timeout if the provider hangs.
+        { timeoutMs: 15_000 }
       );
       return sanitizeFilenameSlug(result.message.content ?? "") || null;
     } catch {

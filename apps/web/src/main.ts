@@ -397,6 +397,12 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "assistant_done": {
+      // Normally a no-op — addBubble() already closed the group the moment the first
+      // assistant_delta arrived. But a turn that exhausts its tool-call iterations without the
+      // model ever producing text (finalText stays "") never fires assistant_delta at all, so
+      // nothing else would ever close a still-open group — it'd keep reading "— working…" forever
+      // and the next turn's tool calls would get appended into it instead of starting fresh.
+      closeToolGroup();
       currentAssistantBubble = null;
       typingIndicator.classList.add("hidden");
       isProcessing = false;

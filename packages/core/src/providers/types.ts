@@ -30,6 +30,11 @@ export interface CompletionResult {
 
 export interface StreamHandlers {
   onTextDelta?: (delta: string) => void;
+  /** Aborts the request if the provider hasn't responded within this many milliseconds, instead
+   *  of falling back to the SDK's default (10 minutes) — for a one-off completion a caller is
+   *  actively waiting on synchronously (not the main agent loop, which can legitimately take a
+   *  while on a real conversation turn). */
+  timeoutMs?: number;
 }
 
 export interface ModelInfo {
