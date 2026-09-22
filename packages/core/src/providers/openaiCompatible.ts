@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import {
   ModelUnavailableError,
+  STREAM_IDLE_TIMEOUT_MS,
   type ChatMessage,
   type CompletionResult,
   type LLMProvider,
@@ -74,6 +75,21 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
       model: string,
       handlers?: StreamHandlers
     ): Promise<CompletionResult> {
+      const idleTimeoutMs = handlers?.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
+      const abort = new AbortController();
+      let stalled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const armIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          stalled = true;
+          abort.abort();
+        }, idleTimeoutMs);
+      };
+      const stalledError = () =>
+        new Error(`The model stopped responding (no data for ${Math.round(idleTimeoutMs / 1000)}s). Please try again.`);
+
+      armIdleTimer();
       let stream;
       try {
         stream = await client.chat.completions.create(
@@ -83,9 +99,14 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
             tools: tools.length ? toOpenAITools(tools) : undefined,
             stream: true,
           },
-          handlers?.timeoutMs !== undefined ? { timeout: handlers.timeoutMs } : undefined
+          {
+            signal: abort.signal,
+            ...(handlers?.timeoutMs !== undefined ? { timeout: handlers.timeoutMs } : {}),
+          }
         );
       } catch (err) {
+        clearTimeout(idleTimer);
+        if (stalled) throw stalledError();
         // 404 covers a model slug that's gone entirely or, as happened in production, a ":free"
         // variant whose free tier the provider pulled out from under it without warning; 429
         // covers the free tier's own rate limit. Both are "this model, right now, isn't usable"
@@ -101,33 +122,44 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): L
       const toolCallsById = new Map<number, { id: string; name: string; args: string }>();
       let finishReason: CompletionResult["finishReason"] = "stop";
 
-      for await (const chunk of stream) {
-        const choice = chunk.choices[0];
-        if (!choice) continue;
+      try {
+        for await (const chunk of stream) {
+          armIdleTimer();
+          const choice = chunk.choices[0];
+          if (!choice) continue;
 
-        const delta = choice.delta;
-        if (delta?.content) {
-          content += delta.content;
-          handlers?.onTextDelta?.(delta.content);
-        }
+          const delta = choice.delta;
+          if (delta?.content) {
+            content += delta.content;
+            handlers?.onTextDelta?.(delta.content);
+          }
 
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index;
-            const existing = toolCallsById.get(idx) ?? { id: "", name: "", args: "" };
-            if (tc.id) existing.id = tc.id;
-            if (tc.function?.name) existing.name += tc.function.name;
-            if (tc.function?.arguments) existing.args += tc.function.arguments;
-            toolCallsById.set(idx, existing);
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              const existing = toolCallsById.get(idx) ?? { id: "", name: "", args: "" };
+              if (tc.id) existing.id = tc.id;
+              if (tc.function?.name) existing.name += tc.function.name;
+              if (tc.function?.arguments) existing.args += tc.function.arguments;
+              toolCallsById.set(idx, existing);
+            }
+          }
+
+          if (choice.finish_reason) {
+            if (choice.finish_reason === "tool_calls") finishReason = "tool_calls";
+            else if (choice.finish_reason === "length") finishReason = "length";
+            else if (choice.finish_reason === "stop") finishReason = "stop";
+            else finishReason = "other";
           }
         }
-
-        if (choice.finish_reason) {
-          if (choice.finish_reason === "tool_calls") finishReason = "tool_calls";
-          else if (choice.finish_reason === "length") finishReason = "length";
-          else if (choice.finish_reason === "stop") finishReason = "stop";
-          else finishReason = "other";
-        }
+        // The SDK ends the iteration quietly (no throw) when its request is aborted, so this is
+        // the path a stall usually takes — without it, a truncated reply would pass as complete.
+        if (stalled) throw stalledError();
+      } catch (err) {
+        if (stalled) throw stalledError();
+        throw err;
+      } finally {
+        clearTimeout(idleTimer);
       }
 
       const toolCalls: ToolCall[] = [...toolCallsById.values()]

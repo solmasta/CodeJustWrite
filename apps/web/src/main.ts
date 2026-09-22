@@ -82,6 +82,15 @@ let isProcessing = false;
 let promptPresets: PromptPreset[] = [];
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+/** Highest turn-event seq rendered so far — sent on every reconnect so the server replays just
+ *  what was missed (see Session.emit server-side). undefined until anything has been rendered. */
+let lastSeq: number | undefined;
+/** The user message most recently sent that the server hasn't confirmed receiving yet. A message
+ *  written into a socket that had silently died is simply lost, and there's no way to tell from
+ *  this end — so it's resent after every reconnect until acknowledged (the server dedupes by id). */
+let unackedMessage: { clientMsgId: string; text: string } | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+const HEARTBEAT_INTERVAL_MS = 20_000;
 /** The single system bubble for the outage currently in progress, if any — updated in place on
  *  every retry instead of a fresh bubble per attempt (a cold-start reconnect can take several
  *  attempts over a minute or more; six identical "Connection lost" bubbles stacking up told the
@@ -250,6 +259,7 @@ async function endSession(): Promise<void> {
 /** Leaves the current session and returns to the repo picker, keeping the sign-in token. */
 function backToRepoPicker(): void {
   void endSession();
+  stopHeartbeat();
   connection?.close();
   connection = null;
   clearActiveSession();
@@ -267,6 +277,9 @@ function connectWebSocket(sessionId: string): void {
   // e.g. backToRepoPicker clears chatHistory) must not be silently reused here — the first outage
   // on this new connection needs a real, visible bubble, not a write into a node nobody can see.
   reconnectBubble = null;
+  lastSeq = undefined;
+  unackedMessage = null;
+  startHeartbeat();
 
   connection = createConnection(sessionId, settings, (status, attempt, maxAttempts) => {
     if (status === "failed") {
@@ -284,7 +297,15 @@ function connectWebSocket(sessionId: string): void {
     connectionStatus.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 
     if (status === "connected") {
+      // Any pending liveness probe was aimed at the socket this one just replaced.
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = null;
+      }
       typingIndicator.classList.add("hidden");
+      if (unackedMessage) {
+        connection?.send({ type: "user_message", text: unackedMessage.text, clientMsgId: unackedMessage.clientMsgId });
+      }
       // Only worth a word if the user actually saw an outage — a normal first connect on session
       // start has no reconnectBubble to close out.
       if (reconnectBubble) {
@@ -304,9 +325,27 @@ function connectWebSocket(sessionId: string): void {
         reconnectBubble = addBubble("system", message);
       }
     }
-  });
+  }, () => lastSeq);
 
   connection.onMessage((msg) => handleServerMessage(msg as ServerMessage));
+}
+
+/** Probes the connection on a fixed interval while the app is open. A network switch (Wi-Fi to
+ *  cellular, walking out of range) with the app still in the foreground kills the socket without
+ *  a close event and without any visibilitychange either — so without this, nothing ever noticed
+ *  the connection was dead, and the app sat "connected" and spinning indefinitely. */
+function startHeartbeat(): void {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    if (document.visibilityState === "visible" && !livenessTimer) checkConnectionAlive(8000);
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  if (livenessTimer) clearTimeout(livenessTimer);
+  livenessTimer = null;
 }
 
 /** Saves the current conversation as a Markdown file directly on this device — no account, no
@@ -365,7 +404,7 @@ async function exportConversation(): Promise<void> {
  *  this the moment the app comes back to the foreground: if the connection isn't even claiming
  *  to be open, reconnect immediately; if it is, send a ping and give it a few seconds to answer
  *  before assuming it's a zombie and forcing a fresh connection. */
-function checkConnectionAlive(): void {
+function checkConnectionAlive(timeoutMs = 4000): void {
   if (!connection) return;
   if (!connection.isConnected()) {
     connection.reconnectNow();
@@ -376,11 +415,26 @@ function checkConnectionAlive(): void {
   livenessTimer = setTimeout(() => {
     livenessTimer = null;
     connection?.reconnectNow();
-  }, 4000);
+  }, timeoutMs);
 }
 
 function handleServerMessage(msg: ServerMessage): void {
+  if (typeof msg.seq === "number" && msg.type !== "history") {
+    // Already rendered (e.g. overlap between a replay and what arrived live) — skip.
+    if (lastSeq !== undefined && msg.seq <= lastSeq) return;
+    lastSeq = msg.seq;
+  }
   switch (msg.type) {
+    case "turn_started": {
+      if (unackedMessage && msg.clientMsgId === unackedMessage.clientMsgId) unackedMessage = null;
+      isProcessing = true;
+      typingIndicator.classList.remove("hidden");
+      break;
+    }
+    case "message_received": {
+      if (unackedMessage && msg.clientMsgId === unackedMessage.clientMsgId) unackedMessage = null;
+      break;
+    }
     case "state": {
       if (msg.provider) {
         settings.provider = msg.provider as Settings["provider"];
@@ -407,6 +461,7 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case "history": {
       replayHistory(msg.entries, !!msg.assistantOpen);
+      if (typeof msg.seq === "number") lastSeq = msg.seq;
       break;
     }
     case "pong": {
@@ -514,14 +569,24 @@ function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
-/** Rebuilds the visible chat feed from the server's recorded transcript (sent once per WS
- *  attach, right after "state") — a page reload, or the browser/OS reclaiming a backgrounded PWA
- *  tab, would otherwise leave the feed looking wiped even though the conversation is still fully
- *  intact server-side. Only replays into an empty feed: a reconnect on a tab that never actually
- *  reloaded already has everything rendered, and replaying there would duplicate it — an empty
- *  feed is exactly what marks this as a genuine fresh load. */
+/** Rebuilds the visible chat feed from the server's recorded transcript. The server sends this
+ *  instead of an incremental replay whenever it can't resume from where this client left off — a
+ *  fresh page load (nothing rendered yet), or an outage long enough that the missed events were
+ *  already evicted from its replay buffer — so the feed is cleared and redrawn to match exactly,
+ *  rather than left missing whatever happened in between. */
 function replayHistory(entries: HistoryEntry[] | undefined, assistantOpen: boolean): void {
-  if (chatHistory.children.length > 0 || !entries?.length) return;
+  closeToolGroup();
+  currentAssistantBubble = null;
+  reconnectBubble = null;
+  chatHistory.innerHTML = "";
+  // A message still awaiting the server's receipt (it's resent on reconnect) stays visible at the
+  // bottom, unless the transcript already ends with it.
+  const lastUser = [...(entries ?? [])].reverse().find((e) => e.type === "user");
+  const showUnacked = !!unackedMessage && lastUser?.text !== unackedMessage.text;
+  if (!entries?.length) {
+    if (showUnacked) addBubble("user", unackedMessage!.text);
+    return;
+  }
   let lastBubble: HTMLDivElement | null = null;
   for (const entry of entries) {
     switch (entry.type) {
@@ -549,6 +614,7 @@ function replayHistory(entries: HistoryEntry[] | undefined, assistantOpen: boole
   // The model may have still been mid-reply when this tab reloaded — keep appending live deltas
   // to that same bubble instead of starting a visually-duplicate new one.
   if (assistantOpen && lastBubble) currentAssistantBubble = lastBubble;
+  if (showUnacked) addBubble("user", unackedMessage!.text);
 }
 
 function addBubble(role: "user" | "assistant" | "system", content: string): HTMLDivElement {
@@ -743,7 +809,9 @@ function sendUserMessage(message: string): void {
   addBubble("user", message);
   typingIndicator.classList.remove("hidden");
   isProcessing = true;
-  connection?.send({ type: "user_message", text: message });
+  const clientMsgId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  unackedMessage = { clientMsgId, text: message };
+  connection?.send({ type: "user_message", text: message, clientMsgId });
 }
 
 function sendChat(): void {
@@ -960,6 +1028,12 @@ function init(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") checkConnectionAlive();
   });
+  // The network itself coming back (or switching, e.g. Wi-Fi to cellular) is the clearest sign
+  // the existing socket is dead — check right away instead of waiting for the next heartbeat.
+  window.addEventListener("online", () => checkConnectionAlive());
+  (navigator as Navigator & { connection?: EventTarget }).connection?.addEventListener?.("change", () =>
+    checkConnectionAlive()
+  );
   // Safari can restore a page from the back/forward cache (bfcache) instead of doing a full
   // reload when a backgrounded PWA tab resumes — event.persisted marks that case, where
   // visibilitychange alone may not have fired since the page was frozen rather than hidden.
@@ -969,6 +1043,7 @@ function init(): void {
 
   signOutBtn.addEventListener("click", () => {
     void endSession();
+    stopHeartbeat();
     connection?.close();
     connection = null;
     clearActiveSession();

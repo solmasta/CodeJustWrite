@@ -256,8 +256,11 @@ httpServer.on("upgrade", (req, socket, head) => {
     return;
   }
 
+  const lastSeqParam = url.searchParams.get("lastSeq");
+  const lastSeq = lastSeqParam !== null && /^\d+$/.test(lastSeqParam) ? Number(lastSeqParam) : undefined;
+
   wss.handleUpgrade(req, socket, head, (ws) => {
-    session.attach(ws);
+    session.attach(ws, lastSeq);
     alive.add(ws);
     ws.on("pong", () => alive.add(ws));
 
@@ -280,7 +283,10 @@ httpServer.on("upgrade", (req, socket, head) => {
           ws.send(JSON.stringify({ type: "pong" }));
           break;
         case "user_message":
-          void session.handleUserMessage(String(msg.text ?? ""));
+          void session.handleUserMessage(
+            String(msg.text ?? ""),
+            typeof msg.clientMsgId === "string" ? msg.clientMsgId : undefined
+          );
           break;
         case "tool_decision":
           session.resolveConfirmation(String(msg.callId), Boolean(msg.approved));

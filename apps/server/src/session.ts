@@ -29,6 +29,13 @@ export interface PendingConfirmation {
 
 const MAX_LOGGED_ARGS_CHARS = 200;
 
+// Bounds on the per-session replay buffer (see Session.emit). Generous enough to cover a phone
+// that dropped off for several minutes mid-turn; anything older falls back to a full history
+// rebuild, which is always correct, just heavier.
+const MAX_BUFFERED_EVENTS = 5000;
+const MAX_BUFFERED_CHARS = 2_000_000;
+const MAX_REMEMBERED_CLIENT_MSG_IDS = 50;
+
 /** Redacted, length-capped one-liner of a tool call's args for the server's own stdout — long
  *  enough to show e.g. a run_shell command or an edited file's path, short enough that a
  *  write_file with a huge `content` field doesn't spam the log. */
@@ -65,6 +72,18 @@ export class Session {
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   private readonly secrets: string[];
   private readonly toolCallStartedAt = new Map<string, number>();
+  /** Every turn event (deltas, tool calls/results, done/error) gets a sequence number and a slot
+   *  in this buffer, so a client that drops off mid-turn — Wi-Fi to cellular handoff, tunnel,
+   *  backgrounded tab — can say "I last saw #N" on reconnect and get exactly what it missed.
+   *  Without it, everything sent while the socket was down just vanished: the reply (and its
+   *  assistant_done) never reached the phone, which kept spinning on "AI is thinking…" forever. */
+  private seq = 0;
+  private eventBuffer: { seq: number; json: string }[] = [];
+  private eventBufferChars = 0;
+  /** Client-generated ids of recently received user messages. The client resends an
+   *  unacknowledged message after every reconnect (it can't know whether a message written into
+   *  a silently-dead socket ever arrived), so this is what makes that resend idempotent. */
+  private readonly recentClientMsgIds: string[] = [];
 
   constructor(
     readonly repoRoot: string,
@@ -89,7 +108,7 @@ export class Session {
       config,
       log: (line: string) => {
         this.transcript.diff(line);
-        this.send({ type: "diff", text: line });
+        this.emit({ type: "diff", text: line });
       },
       confirm: (question: string) => this.requestConfirmation(question),
     };
@@ -107,7 +126,7 @@ export class Session {
       systemPrompt: buildSystemPrompt(this.promptPreset, this.customInstructions),
       onTextDelta: (delta) => {
         this.transcript.assistantDelta(delta);
-        this.send({ type: "assistant_delta", text: delta });
+        this.emit({ type: "assistant_delta", text: delta });
       },
       onToolCall: (name, args, callId) => {
         this.toolCallStartedAt.set(callId, Date.now());
@@ -119,7 +138,7 @@ export class Session {
         // logging a capped, redacted summary of the args too means the next one won't.
         log.tool(`[session ${this.id.slice(0, 8)}] → ${name} ${summarizeToolArgs(args, this.secrets)}`);
         this.transcript.toolCall(name, args);
-        this.send({ type: "tool_call", name, args, callId });
+        this.emit({ type: "tool_call", name, args, callId });
       },
       onToolResult: (name, result, error, callId) => {
         const startedAt = this.toolCallStartedAt.get(callId);
@@ -130,7 +149,7 @@ export class Session {
             (durationMs !== undefined ? `${durationMs}ms` : "")
         );
         this.transcript.toolResult(name, result, error);
-        this.send({ type: "tool_result", name, result, error, callId });
+        this.emit({ type: "tool_result", name, result, error, callId });
       },
     });
   }
@@ -139,7 +158,9 @@ export class Session {
     this.lastActiveAt = Date.now();
   }
 
-  attach(ws: WebSocket): void {
+  /** @param lastSeq the highest event seq the client already has, or undefined for a client
+   *  with nothing rendered yet (fresh page load). */
+  attach(ws: WebSocket, lastSeq?: number): void {
     this.ws = ws;
     this.send({
       type: "state",
@@ -152,12 +173,23 @@ export class Session {
       customInstructions: this.customInstructions,
       promptPresets: PROMPT_PRESETS,
     });
-    // Replays the conversation so far into a client that just (re)connected — most importantly a
-    // page that was freshly reloaded, whose chat feed would otherwise start out empty even though
-    // the Agent's own conversation history is still fully intact on this end.
-    const entries = this.transcript.getEntries();
-    if (entries.length) {
-      this.send({ type: "history", entries, assistantOpen: this.transcript.assistantOpen });
+    // A client that already has the feed up to some point gets just the events it missed. One
+    // that has nothing (fresh load), or whose position has already been evicted from the buffer,
+    // gets the whole conversation rebuilt from the transcript instead — the client clears its
+    // feed and redraws, so either way it ends up exactly in sync with this end.
+    const oldestBuffered = this.eventBuffer.length ? this.eventBuffer[0].seq : this.seq + 1;
+    const canResume = lastSeq !== undefined && lastSeq <= this.seq && lastSeq >= oldestBuffered - 1;
+    if (canResume) {
+      for (const event of this.eventBuffer) {
+        if (event.seq > lastSeq) this.sendRaw(event.json);
+      }
+    } else {
+      this.send({
+        type: "history",
+        entries: this.transcript.getEntries(),
+        assistantOpen: this.transcript.assistantOpen,
+        seq: this.seq,
+      });
     }
     // A tool confirmation is only ever pushed once, over whatever socket happened to be attached
     // at the moment it was requested. If the app was backgrounded (or a zombie connection dropped
@@ -174,9 +206,31 @@ export class Session {
     if (this.ws === ws) this.ws = null;
   }
 
+  /** For one-off replies (state, pong, models, …) that only matter to whoever is connected right
+   *  now. Anything that's part of a conversation turn goes through emit() instead. */
   send(message: Record<string, unknown>): void {
+    this.sendRaw(JSON.stringify(redactSecrets(message, this.secrets)));
+  }
+
+  /** Sends a turn event stamped with the next sequence number and keeps it for replay (see
+   *  eventBuffer) — delivered even if no client is connected at this moment. */
+  emit(message: Record<string, unknown>): void {
+    const seq = ++this.seq;
+    const json = JSON.stringify(redactSecrets({ ...message, seq }, this.secrets));
+    this.eventBuffer.push({ seq, json });
+    this.eventBufferChars += json.length;
+    while (
+      this.eventBuffer.length > 1 &&
+      (this.eventBuffer.length > MAX_BUFFERED_EVENTS || this.eventBufferChars > MAX_BUFFERED_CHARS)
+    ) {
+      this.eventBufferChars -= this.eventBuffer.shift()!.json.length;
+    }
+    this.sendRaw(json);
+  }
+
+  private sendRaw(json: string): void {
     if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      this.ws.send(JSON.stringify(redactSecrets(message, this.secrets)));
+      this.ws.send(json);
     }
   }
 
@@ -221,17 +275,28 @@ export class Session {
     pending.resolve(approved);
   }
 
-  async handleUserMessage(text: string): Promise<void> {
+  async handleUserMessage(text: string, clientMsgId?: string): Promise<void> {
     this.touch();
+    if (clientMsgId) {
+      if (this.recentClientMsgIds.includes(clientMsgId)) {
+        // A resend of something already received — just confirm receipt so the client stops
+        // resending it; the original is already being (or has been) handled.
+        this.send({ type: "message_received", clientMsgId });
+        return;
+      }
+      this.recentClientMsgIds.push(clientMsgId);
+      if (this.recentClientMsgIds.length > MAX_REMEMBERED_CLIENT_MSG_IDS) this.recentClientMsgIds.shift();
+    }
     this.busy = true;
     this.transcript.user(text);
+    this.emit({ type: "turn_started", clientMsgId });
     try {
       const finalText = await this.agent.send(text);
       this.transcript.turnEnded();
-      this.send({ type: "assistant_done", text: finalText });
+      this.emit({ type: "assistant_done", text: finalText });
     } catch (err) {
       this.transcript.turnEnded();
-      this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      this.emit({ type: "error", message: err instanceof Error ? err.message : String(err) });
     } finally {
       this.busy = false;
     }
