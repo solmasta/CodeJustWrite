@@ -108,6 +108,31 @@ describe("createOpenAICompatibleProvider complete", () => {
     }
   );
 
+  it("aborts with a clear error when a stream stalls mid-reply instead of hanging forever", async () => {
+    const stalled = createServer((_req, res) => {
+      res.setHeader("content-type", "text/event-stream");
+      const chunk = { id: "c", object: "chat.completion.chunk", created: 0, model: "m", choices: [{ index: 0, delta: { content: "Hel" }, finish_reason: null }] };
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      // ...and then never another byte, never an end.
+    });
+    await new Promise<void>((resolve) => stalled.listen(0, "127.0.0.1", resolve));
+    const { port } = stalled.address() as AddressInfo;
+    try {
+      const provider = createOpenAICompatibleProvider({ name: "test", apiKey: "k", baseURL: `http://127.0.0.1:${port}` });
+      const deltas: string[] = [];
+      await expect(
+        provider.complete([{ role: "user", content: "hi" }], [], "m", {
+          onTextDelta: (d) => deltas.push(d),
+          idleTimeoutMs: 200,
+        })
+      ).rejects.toThrow(/stopped responding/);
+      expect(deltas).toEqual(["Hel"]);
+    } finally {
+      stalled.closeAllConnections();
+      stalled.close();
+    }
+  });
+
   it(
     // Reproduces the exact live failure: OpenRouter pulling a ":free" slug's free tier returns a
     // plain 404 with a message like "This model is unavailable for free. ... use this slug

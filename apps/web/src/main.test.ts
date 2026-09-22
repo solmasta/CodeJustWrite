@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidUrl, escapeHtml, buildExportFilename, buildImportMessage } from "./utils";
+import { isValidUrl, escapeHtml, buildExportFilename, buildImportMessage, tokenFromHash, isLocalServer } from "./utils";
 
 describe("main utilities", () => {
   describe("isValidUrl", () => {
@@ -82,6 +82,30 @@ describe("main utilities", () => {
       expect(buildImportMessage("chat.md", content, 5)).toBe(
         'Here\'s an earlier conversation for context (imported from "chat.md"):\n\n01234'
       );
+    });
+  });
+
+  describe("tokenFromHash (Termux shortcut sign-in)", () => {
+    it("reads the token the start shortcut passes in the URL fragment", () => {
+      expect(tokenFromHash("#token=abc123")).toBe("abc123");
+      expect(tokenFromHash("token=abc123")).toBe("abc123");
+    });
+
+    it("returns null when there's no usable token", () => {
+      expect(tokenFromHash("")).toBeNull();
+      expect(tokenFromHash("#token=")).toBeNull();
+      expect(tokenFromHash("#other=1")).toBeNull();
+    });
+  });
+
+  describe("isLocalServer", () => {
+    it("recognizes a server on this device", () => {
+      expect(isLocalServer({ serverUrl: "http://localhost:8787" } as never)).toBe(true);
+      expect(isLocalServer({ serverUrl: "http://127.0.0.1:8787" } as never)).toBe(true);
+    });
+
+    it("treats a hosted server as remote", () => {
+      expect(isLocalServer({ serverUrl: "https://codejustwrite.onrender.com" } as never)).toBe(false);
     });
   });
 });

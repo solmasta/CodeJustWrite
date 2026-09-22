@@ -29,7 +29,10 @@ export interface ConnectionManager {
 export function createConnection(
   sessionId: string,
   settings: Settings,
-  onStatusChange: StatusChangeHandler
+  onStatusChange: StatusChangeHandler,
+  /** Highest event seq the caller has already rendered (undefined = nothing yet), read fresh on
+   *  every (re)connect so the server replays only what was missed while disconnected. */
+  getResumeSeq: () => number | undefined = () => undefined
 ): ConnectionManager {
   let socket: WebSocket | null = null;
   const messageQueue: string[] = [];
@@ -54,7 +57,11 @@ export function createConnection(
     
     onStatusChange(reconnectAttempts > 0 ? "reconnecting" : "connecting", reconnectAttempts + 1, maxReconnectAttempts);
     
-    const wsUrl = `${apiBase(settings).replace(/^http/, "ws")}/ws?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(settings.token)}`;
+    const resumeSeq = getResumeSeq();
+    const wsUrl =
+      `${apiBase(settings).replace(/^http/, "ws")}/ws?sessionId=${encodeURIComponent(sessionId)}` +
+      `&token=${encodeURIComponent(settings.token)}` +
+      (resumeSeq !== undefined ? `&lastSeq=${resumeSeq}` : "");
     socket = new WebSocket(wsUrl);
     
     socket.onopen = () => {

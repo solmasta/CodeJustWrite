@@ -102,4 +102,17 @@ describe("createConnection reconnect attempt numbering", () => {
     // No further connection attempt should ever have been opened after giving up.
     expect(FakeWebSocket.instances.length).toBe(11);
   });
+
+  it("asks the server to resume from the caller's current seq on every (re)connect", async () => {
+    let seq: number | undefined = undefined;
+    createConnection("session-1", { token: "t", serverUrl: "http://localhost:8787" } as never, () => {}, () => seq);
+
+    expect(FakeWebSocket.instances[0].url).not.toContain("lastSeq");
+
+    FakeWebSocket.instances[0].simulateOpen();
+    seq = 42;
+    FakeWebSocket.instances[0].simulateClose();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(FakeWebSocket.instances[1].url).toContain("&lastSeq=42");
+  });
 });

@@ -59,7 +59,12 @@ export interface ServerMessage {
     | "state"
     | "models"
     | "history"
-    | "pong";
+    | "pong"
+    | "turn_started"
+    | "message_received";
+  /** Present on turn events (and on "history", as the position it brings the client up to). */
+  seq?: number;
+  clientMsgId?: string;
   text?: string;
   name?: string;
   args?: unknown;

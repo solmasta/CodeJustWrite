@@ -73,7 +73,7 @@ export function execSandboxed(
   return new Promise((resolve) => {
     const child = args
       ? spawn(command, args, { cwd, env: mergedEnv })
-      : spawn(command, { cwd, shell: true, env: mergedEnv });
+      : spawn(command, { cwd, shell: defaultShell(), env: mergedEnv });
 
     let stdout = "";
     let stderr = "";
@@ -132,4 +132,11 @@ export function execSandboxed(
       });
     });
   });
+}
+
+/** Node's `shell: true` means /system/bin/sh on Android — the OS's own minimal shell, with none of
+ *  the tools a Termux install actually provides. When running under Termux ($PREFIX set), use
+ *  Termux's own sh instead so commands behave the same as they would in its terminal. */
+function defaultShell(): string | true {
+  return process.platform === "android" && process.env.PREFIX ? `${process.env.PREFIX}/bin/sh` : true;
 }

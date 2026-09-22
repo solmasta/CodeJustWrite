@@ -35,7 +35,14 @@ export interface StreamHandlers {
    *  actively waiting on synchronously (not the main agent loop, which can legitimately take a
    *  while on a real conversation turn). */
   timeoutMs?: number;
+  /** Aborts a streaming reply once this many milliseconds pass with no new chunk arriving.
+   *  Defaults to STREAM_IDLE_TIMEOUT_MS. The SDK's own timeout only covers getting the response
+   *  started — a stream that stalls midway (flaky upstream, a provider-side hang) would otherwise
+   *  leave the turn, and the session's busy flag with it, stuck forever. */
+  idleTimeoutMs?: number;
 }
+
+export const STREAM_IDLE_TIMEOUT_MS = 180_000;
 
 export interface ModelInfo {
   id: string;
