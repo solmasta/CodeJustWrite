@@ -338,6 +338,6 @@ process.on("SIGTERM", () => {
   void sessions.closeMcp().finally(() => httpServer.close(() => process.exit(0)));
 });
 
-httpServer.listen(serverConfig.port, () => {
+httpServer.listen(serverConfig.port, serverConfig.host, () => {
   console.log(`[cjw-server] listening on :${serverConfig.port} (web dist: ${webDist})`);
 });

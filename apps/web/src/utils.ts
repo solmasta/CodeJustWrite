@@ -111,3 +111,24 @@ export function formatDuration(ms: number): string {
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${(ms / 60000).toFixed(1)}m`;
 }
+
+/** True when the app is talking to a server on this same device — the Termux setup (see
+ *  scripts/termux), where "can't connect" almost always just means the server isn't started. */
+export function isLocalServer(s: Settings): boolean {
+  try {
+    const host = new URL(apiBase(s)).hostname;
+    return host === "localhost" || host === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+export const LOCAL_SERVER_HINT =
+  "The server on this phone isn't running — tap the CodeJustWrite shortcut on your home screen to start it.";
+
+/** The Termux start shortcut opens the app at `/#token=…` so there's no sign-in screen. Returns
+ *  that token (or null) from a location.hash value. */
+export function tokenFromHash(hash: string): string | null {
+  const token = new URLSearchParams(hash.replace(/^#/, "")).get("token");
+  return token && token.trim() ? token.trim() : null;
+}

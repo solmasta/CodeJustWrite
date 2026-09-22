@@ -11,7 +11,21 @@ import {
   clearDraft,
 } from "./settings.js";
 import { createConnection } from "./connection.js";
-import { el, apiFetch, escapeHtml, isValidUrl, show, hide, text, debounce, buildExportFilename, buildImportMessage } from "./utils.js";
+import {
+  el,
+  apiFetch,
+  escapeHtml,
+  isValidUrl,
+  show,
+  hide,
+  text,
+  debounce,
+  buildExportFilename,
+  buildImportMessage,
+  isLocalServer,
+  LOCAL_SERVER_HINT,
+  tokenFromHash,
+} from "./utils.js";
 import {
   supportsExportFolder,
   saveExportDirHandle,
@@ -141,7 +155,9 @@ async function handleSignIn(): Promise<void> {
     hide(signInError);
     await showRepoSection();
   } catch (e) {
-    text(signInError, String(e instanceof Error ? e.message : e));
+    // fetch() itself rejecting (not an HTTP error) means nothing answered at all.
+    const unreachable = e instanceof TypeError && isLocalServer(settings);
+    text(signInError, unreachable ? LOCAL_SERVER_HINT : String(e instanceof Error ? e.message : e));
     show(signInError);
   } finally {
     continueBtn.disabled = false;
@@ -285,9 +301,11 @@ function connectWebSocket(sessionId: string): void {
     if (status === "failed") {
       connectionStatus.className = "connection-status disconnected";
       connectionStatus.textContent = "Session lost";
-      const message =
-        "Couldn't reconnect after several tries — it may no longer exist on the server. " +
-        "Open Settings (⚙) → Change Repository to start a new one.";
+      const message = isLocalServer(settings)
+        ? `${LOCAL_SERVER_HINT} If it's already running, the session was lost when it restarted — ` +
+          "open Settings (⚙) → Change Repository to start a new one."
+        : "Couldn't reconnect after several tries — it may no longer exist on the server. " +
+          "Open Settings (⚙) → Change Repository to start a new one.";
       if (reconnectBubble) reconnectBubble.textContent = message;
       else addBubble("system", message);
       reconnectBubble = null;
@@ -316,9 +334,10 @@ function connectWebSocket(sessionId: string): void {
       // The free-hosting-tier reality this is usually caused by: a server that's been asleep can
       // take a while to wake back up, so set that expectation instead of leaving "attempting to
       // reconnect" looking stuck with no sense of progress or whether it'll ever succeed.
-      const message =
-        `Connection lost. Reconnecting… (attempt ${attempt} of ${maxAttempts} — ` +
-        "can take up to a minute or so if the server was asleep.)";
+      const message = isLocalServer(settings)
+        ? `Connection lost. Reconnecting… (attempt ${attempt} of ${maxAttempts}) ${LOCAL_SERVER_HINT}`
+        : `Connection lost. Reconnecting… (attempt ${attempt} of ${maxAttempts} — ` +
+          "can take up to a minute or so if the server was asleep.)";
       if (reconnectBubble) {
         reconnectBubble.textContent = message;
       } else {
@@ -956,6 +975,15 @@ function saveSettings(): void {
 
 // --- Init ---
 function init(): void {
+  // Opened from the Termux shortcut: sign in with the token it passed, against this same origin,
+  // then drop the token from the address bar/history.
+  const hashToken = tokenFromHash(location.hash);
+  if (hashToken) {
+    persistSettings({ serverUrl: "", token: hashToken });
+    settings = loadSettings();
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
   serverInput.value = settings.serverUrl || "";
   tokenInput.value = settings.token || "";
 
