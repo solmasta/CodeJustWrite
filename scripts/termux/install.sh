@@ -83,6 +83,8 @@ export CJW_HOST='127.0.0.1'
 export PORT='${PORT:-8787}'
 export CJW_WORKSPACES_DIR='$CONF_DIR/workspaces'
 ENV
+# umask only applies to new files — also lock down one left over from an earlier run.
+chmod 600 "$ENV_FILE"
 
 step "Creating home-screen shortcuts"
 S="$APP_DIR/scripts/termux"
