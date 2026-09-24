@@ -90,14 +90,14 @@ key needed — the agent sends a placeholder one that these servers ignore.
 # 1. Install Ollama and pull a model with solid tool-calling support
 #    (this agent calls tools on nearly every turn, so that matters more
 #    than raw benchmark scores for smaller models):
-ollama pull qwen2.5-coder:7b     # good default; try the 14b/32b variants if your laptop can take it
+ollama pull qwen2.5-coder:14b     # good default; try 7b if your laptop is tighter on RAM, or 32b if it isn't
 
 # 2. Point cjw at it — either per-session:
-cjw --provider local --model qwen2.5-coder:7b
+cjw --provider local --model qwen2.5-coder:14b
 
 # ...or set it as the default in apps/cli/.env:
 # CJW_DEFAULT_PROVIDER=local
-# CJW_DEFAULT_MODEL=qwen2.5-coder:7b
+# CJW_DEFAULT_MODEL=qwen2.5-coder:14b
 ```
 
 `/provider local` and `/models` work the same way as the cloud providers —
@@ -114,10 +114,11 @@ Render/Fly/etc., since `localhost` there means the container, not your
 laptop.
 
 Trade-offs versus DeepInfra/OpenRouter: free and fully private (nothing
-leaves your machine), but you're bounded by your laptop's RAM/GPU — a 7B
-model is usably fast on most modern laptops, but noticeably less capable at
-following complex multi-step tool-calling instructions than the larger
-cloud-hosted models this project defaults to. If it seems to ignore tools or
+leaves your machine), but you're bounded by your laptop's RAM/GPU — a 14B
+model needs roughly 16GB+ RAM to run comfortably and is noticeably less
+capable at following complex multi-step tool-calling instructions than the
+larger cloud-hosted models this project defaults to (drop to 7b if your
+laptop can't spare that much RAM). If it seems to ignore tools or
 loop, try a larger local model first before assuming something's broken.
 
 ### Prompt style and custom instructions

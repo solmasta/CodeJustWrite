@@ -20,10 +20,10 @@ export interface CjwConfig {
 const DEFAULT_MODELS: Record<ProviderName, string> = {
   deepinfra: "moonshotai/Kimi-K3",
   openrouter: "cohere/north-mini-code:free",
-  // Ollama's own naming; needs `ollama pull qwen2.5-coder:7b` first. Chosen over plain llama3.1
+  // Ollama's own naming; needs `ollama pull qwen2.5-coder:14b` first. Chosen over plain llama3.1
   // because this agent leans on tool-calling for every turn, and this is one of the strongest
-  // small models with reliable tool-call support in Ollama's OpenAI-compatible endpoint.
-  local: "qwen2.5-coder:7b",
+  // models with reliable tool-call support in Ollama's OpenAI-compatible endpoint.
+  local: "qwen2.5-coder:14b",
 };
 
 export function loadConfig(): CjwConfig {
