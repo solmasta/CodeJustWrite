@@ -69,14 +69,56 @@ below as needed.
 
 ### Switching models
 
-Both providers' catalogs change over time, so rather than hardcode model IDs
-that go stale, `/models` (CLI) and the model field's dropdown (PWA settings)
-fetch the provider's live model list. `openrouter` proxies several hosted
-Claude models under `anthropic/...` IDs alongside its other models — run
-`/provider openrouter` (with `OPENROUTER_KEY` set), then `/models claude` to
-see exactly which ones your OpenRouter account currently has access to, and
-`/model <id>` to switch to one. Pricing and availability are set by
+Both cloud providers' catalogs change over time, so rather than hardcode
+model IDs that go stale, `/models` (CLI) and the model field's dropdown (PWA
+settings) fetch the provider's live model list. `openrouter` proxies several
+hosted Claude models under `anthropic/...` IDs alongside its other models —
+run `/provider openrouter` (with `OPENROUTER_KEY` set), then `/models claude`
+to see exactly which ones your OpenRouter account currently has access to,
+and `/model <id>` to switch to one. Pricing and availability are set by
 OpenRouter, not by this project.
+
+### Running fully local (no API key, no cloud)
+
+A third provider, `local`, talks to any OpenAI-compatible server running on
+your own machine — [Ollama](https://ollama.com) (default), llama.cpp's
+`llama-server`, or LM Studio's local server all work, since they all speak
+the same `/v1/chat/completions` wire format DeepInfra/OpenRouter do. No API
+key needed — the agent sends a placeholder one that these servers ignore.
+
+```bash
+# 1. Install Ollama and pull a model with solid tool-calling support
+#    (this agent calls tools on nearly every turn, so that matters more
+#    than raw benchmark scores for smaller models):
+ollama pull qwen2.5-coder:7b     # good default; try the 14b/32b variants if your laptop can take it
+
+# 2. Point cjw at it — either per-session:
+cjw --provider local --model qwen2.5-coder:7b
+
+# ...or set it as the default in apps/cli/.env:
+# CJW_DEFAULT_PROVIDER=local
+# CJW_DEFAULT_MODEL=qwen2.5-coder:7b
+```
+
+`/provider local` and `/models` work the same way as the cloud providers —
+`/models` lists whatever you've `ollama pull`ed locally. If Ollama (or
+whichever server) isn't running at `http://localhost:11434/v1`, set
+`CJW_LOCAL_BASE_URL` to wherever it is.
+
+The PWA backend supports this too (`CJW_DEFAULT_PROVIDER=local` /
+`CJW_LOCAL_BASE_URL` in `apps/server/.env`, or the "Local (Ollama)" option in
+Settings), but only when the **server process itself** can reach the local
+model server — fine when you're running the backend on the same laptop your
+phone connects to over Wi-Fi, not usable if you deploy the backend to
+Render/Fly/etc., since `localhost` there means the container, not your
+laptop.
+
+Trade-offs versus DeepInfra/OpenRouter: free and fully private (nothing
+leaves your machine), but you're bounded by your laptop's RAM/GPU — a 7B
+model is usably fast on most modern laptops, but noticeably less capable at
+following complex multi-step tool-calling instructions than the larger
+cloud-hosted models this project defaults to. If it seems to ignore tools or
+loop, try a larger local model first before assuming something's broken.
 
 ### Prompt style and custom instructions
 

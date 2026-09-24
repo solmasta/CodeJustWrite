@@ -8,6 +8,7 @@ export function makeConfig(overrides: Partial<CjwConfig> = {}): CjwConfig {
   return {
     provider: "deepinfra",
     model: "moonshotai/Kimi-K3",
+    localBaseUrl: "http://localhost:11434/v1",
     shellTimeoutSec: 30,
     mcpServers: [],
     ...overrides,

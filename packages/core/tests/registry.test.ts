@@ -13,6 +13,11 @@ describe("ProviderRegistry", () => {
     expect(registry.get("openrouter").name).toBe("openrouter");
   });
 
+  it("creates a local provider with no API key required", () => {
+    const registry = new ProviderRegistry(makeConfig());
+    expect(registry.get("local").name).toBe("local");
+  });
+
   it("throws a clear error naming the missing env var for each provider", () => {
     const registry = new ProviderRegistry(makeConfig());
     expect(() => registry.get("deepinfra")).toThrow(/DEEPINFRA_KEY/);

@@ -295,7 +295,9 @@ httpServer.on("upgrade", (req, socket, head) => {
           session.setAutoApprove(Boolean(msg.value));
           break;
         case "set_provider":
-          session.setProvider(msg.provider === "openrouter" ? "openrouter" : "deepinfra");
+          session.setProvider(
+            msg.provider === "openrouter" ? "openrouter" : msg.provider === "local" ? "local" : "deepinfra"
+          );
           session.send({
             type: "state",
             provider: session.provider,
@@ -314,7 +316,7 @@ httpServer.on("upgrade", (req, socket, head) => {
           );
           break;
         case "list_models": {
-          const provider = msg.provider === "openrouter" ? "openrouter" : "deepinfra";
+          const provider = msg.provider === "openrouter" ? "openrouter" : msg.provider === "local" ? "local" : "deepinfra";
           session
             .listModels(provider)
             .then((models) => session.send({ type: "models", provider, models }))

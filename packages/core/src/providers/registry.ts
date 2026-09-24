@@ -33,6 +33,14 @@ export class ProviderRegistry {
         apiKey: this.cfg.openrouterApiKey,
         baseURL: OPENROUTER_BASE_URL,
       });
+    } else if (providerName === "local") {
+      // Ollama/llama.cpp/LM Studio's local OpenAI-compatible servers don't check the API key,
+      // but the OpenAI SDK still requires a non-empty string to construct a client.
+      provider = createOpenAICompatibleProvider({
+        name: "local",
+        apiKey: "local",
+        baseURL: this.cfg.localBaseUrl,
+      });
     } else {
       throw new Error(`Unknown provider: ${providerName}`);
     }

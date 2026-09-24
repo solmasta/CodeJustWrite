@@ -20,7 +20,7 @@ import {
 const HELP_TEXT = `
 Slash commands:
   /help                Show this help
-  /provider <name>     Switch LLM provider: deepinfra | openrouter
+  /provider <name>     Switch LLM provider: deepinfra | openrouter | local
   /models [filter]     List models available from the current provider (live), e.g. /models claude
   /model <name>        Switch model for the current provider
   /mode [preset]        Show or switch prompt style (default | tdd | explain | terse | security)
@@ -131,8 +131,8 @@ export async function runRepl(config: CjwConfig): Promise<void> {
         agent.reset();
         log.info("Conversation cleared.");
       } else if (cmd === "provider") {
-        if (arg !== "deepinfra" && arg !== "openrouter") {
-          log.error("Usage: /provider deepinfra|openrouter");
+        if (arg !== "deepinfra" && arg !== "openrouter" && arg !== "local") {
+          log.error("Usage: /provider deepinfra|openrouter|local");
         } else {
           state.provider = arg;
           state.model = defaultModelFor(arg);
