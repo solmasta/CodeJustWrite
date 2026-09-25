@@ -58,9 +58,12 @@ mkdir -p "$CONF_DIR" "$CONF_DIR/workspaces"
 chmod 700 "$CONF_DIR"
 # Keep whatever an earlier run already saved; only ask for what's missing.
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
-if [ -z "${OPENROUTER_KEY:-}" ] && [ -z "${DEEPINFRA_KEY:-}" ]; then
-  echo "An AI provider key is required. OpenRouter has free models: https://openrouter.ai/keys"
-  OPENROUTER_KEY="$(ask 'OpenRouter API key: ')"
+if [ -z "${CJW_LOCAL_BASE_URL:-}" ]; then
+  echo "CodeJustWrite needs a model server it can reach — usually Ollama running on a laptop on"
+  echo "the same Wi-Fi (run 'ollama pull qwen2.5-coder:14b' there first). Find that laptop's local"
+  echo "IP (macOS: System Settings > Wi-Fi > Details; Windows: ipconfig; Linux: ip addr)."
+  LOCAL_HOST="$(ask 'Laptop IP (e.g. 192.168.1.42): ')"
+  CJW_LOCAL_BASE_URL="http://${LOCAL_HOST}:11434/v1"
 fi
 if [ -z "${GITHUB_TOKEN:-}" ]; then
   echo "A GitHub token lets the AI push branches and open/merge PRs (Enter to skip for now)."
@@ -73,12 +76,10 @@ fi
 umask 077
 cat >"$ENV_FILE" <<ENV
 # CodeJustWrite settings — edit and then tap "CJW Restart" to apply.
-export OPENROUTER_KEY='${OPENROUTER_KEY:-}'
-export DEEPINFRA_KEY='${DEEPINFRA_KEY:-}'
+export CJW_LOCAL_BASE_URL='${CJW_LOCAL_BASE_URL}'
 export GITHUB_TOKEN='${GITHUB_TOKEN:-}'
 export CJW_AUTH_TOKEN='${CJW_AUTH_TOKEN}'
-export CJW_DEFAULT_PROVIDER='${CJW_DEFAULT_PROVIDER:-openrouter}'
-export CJW_DEFAULT_MODEL='${CJW_DEFAULT_MODEL:-cohere/north-mini-code:free}'
+export CJW_DEFAULT_MODEL='${CJW_DEFAULT_MODEL:-qwen2.5-coder:14b}'
 export CJW_HOST='127.0.0.1'
 export PORT='${PORT:-8787}'
 export CJW_WORKSPACES_DIR='$CONF_DIR/workspaces'

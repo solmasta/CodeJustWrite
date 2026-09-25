@@ -123,13 +123,8 @@ test.describe('CodeJustWrite Web App', () => {
       await expect(page.locator('.settings-modal')).toBeVisible();
     });
 
-    test('has provider select', async ({ page }) => {
-      await expect(page.locator('#provider')).toBeVisible();
-    });
-
-    test('can change provider', async ({ page }) => {
-      await page.locator('#provider').selectOption('deepinfra');
-      await expect(page.locator('#model')).toHaveValue(/deepinfra/i);
+    test('has model select', async ({ page }) => {
+      await expect(page.locator('#modelSelect')).toBeVisible();
     });
 
     test('has auto-approve toggle', async ({ page }) => {

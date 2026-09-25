@@ -3,7 +3,9 @@
 An AI-assisted coding agent. It reads and writes files in a git repository,
 runs the test suite in an isolated sandbox, drives a headless browser for UI
 checks, and manages git branches/commits/merges and GitHub pull requests —
-backed by **DeepInfra** or **OpenRouter** models.
+backed by a **local** model (via [Ollama](https://ollama.com), llama.cpp's
+`llama-server`, or LM Studio) rather than a cloud provider. No API key, and
+nothing leaves your machine.
 
 It ships two ways to use the same agent:
 
@@ -26,13 +28,20 @@ apps/web        the PWA itself (Vite): manifest + service worker + chat UI
 ## Quick start: terminal CLI
 
 ```bash
+# 1. Install Ollama (https://ollama.com) and pull a model with solid
+#    tool-calling support — this agent calls tools on nearly every turn,
+#    so that matters more than raw benchmark scores for smaller models:
+ollama pull qwen2.5-coder:14b     # good default; try 7b if RAM is tight, or 32b if it isn't
+
+# 2. Build and run cjw
 npm install
 npm run build:core
 npm run build:cli
 npm link --workspace=@codejustwrite/cli   # optional: exposes `cjw` globally
 
 cp apps/cli/.env.example apps/cli/.env
-# fill in DEEPINFRA_KEY and/or OPENROUTER_KEY
+# defaults are already set for Ollama at localhost:11434 — edit only if
+# your model server runs elsewhere, or to change the default model
 ```
 
 From inside any git repository:
@@ -43,15 +52,14 @@ cjw
 npm run dev:cli
 ```
 
-Or pick a provider/model at launch: `cjw --provider deepinfra --model moonshotai/Kimi-K3`
+Or pick a model at launch: `cjw --model qwen2.5-coder:32b`
 
 ### Slash commands
 
 ```
 /help                Show available commands
-/provider <name>     Switch LLM provider: deepinfra | openrouter
-/models [filter]     List models available from the current provider (live), e.g. /models claude
-/model <name>         Switch model for the current provider
+/models [filter]     List locally-pulled Ollama models (live), e.g. /models coder
+/model <name>         Switch model
 /mode [preset]         Show or switch prompt style: default | tdd | explain | terse | security
 /instructions [text]   Set (or, with no text, clear) custom instructions added to every reply
 /mcp                  Show connected MCP servers and their tools
@@ -69,57 +77,28 @@ below as needed.
 
 ### Switching models
 
-Both cloud providers' catalogs change over time, so rather than hardcode
-model IDs that go stale, `/models` (CLI) and the model field's dropdown (PWA
-settings) fetch the provider's live model list. `openrouter` proxies several
-hosted Claude models under `anthropic/...` IDs alongside its other models —
-run `/provider openrouter` (with `OPENROUTER_KEY` set), then `/models claude`
-to see exactly which ones your OpenRouter account currently has access to,
-and `/model <id>` to switch to one. Pricing and availability are set by
-OpenRouter, not by this project.
+Rather than hardcode model IDs that go stale, `/models` (CLI) and the model
+field's dropdown (PWA settings) fetch the live list of whatever you've
+`ollama pull`ed locally, and `/model <id>` switches to one. If your model
+server isn't Ollama, or isn't running at `http://localhost:11434/v1`, set
+`CJW_LOCAL_BASE_URL` to wherever it is (llama.cpp's `llama-server` and LM
+Studio's local server both work — they all speak the same
+`/v1/chat/completions` wire format).
 
-### Running fully local (no API key, no cloud)
+The PWA backend supports this too (`CJW_LOCAL_BASE_URL`/`CJW_DEFAULT_MODEL`
+in `apps/server/.env`), but only when the **server process itself** can
+reach the local model server — fine when you're running the backend on the
+same laptop your phone connects to over Wi-Fi, not usable if you deploy the
+backend to Render/Fly/etc., since `localhost` there means the container, not
+your laptop (see `render.yaml`'s note on this).
 
-A third provider, `local`, talks to any OpenAI-compatible server running on
-your own machine — [Ollama](https://ollama.com) (default), llama.cpp's
-`llama-server`, or LM Studio's local server all work, since they all speak
-the same `/v1/chat/completions` wire format DeepInfra/OpenRouter do. No API
-key needed — the agent sends a placeholder one that these servers ignore.
-
-```bash
-# 1. Install Ollama and pull a model with solid tool-calling support
-#    (this agent calls tools on nearly every turn, so that matters more
-#    than raw benchmark scores for smaller models):
-ollama pull qwen2.5-coder:14b     # good default; try 7b if your laptop is tighter on RAM, or 32b if it isn't
-
-# 2. Point cjw at it — either per-session:
-cjw --provider local --model qwen2.5-coder:14b
-
-# ...or set it as the default in apps/cli/.env:
-# CJW_DEFAULT_PROVIDER=local
-# CJW_DEFAULT_MODEL=qwen2.5-coder:14b
-```
-
-`/provider local` and `/models` work the same way as the cloud providers —
-`/models` lists whatever you've `ollama pull`ed locally. If Ollama (or
-whichever server) isn't running at `http://localhost:11434/v1`, set
-`CJW_LOCAL_BASE_URL` to wherever it is.
-
-The PWA backend supports this too (`CJW_DEFAULT_PROVIDER=local` /
-`CJW_LOCAL_BASE_URL` in `apps/server/.env`, or the "Local (Ollama)" option in
-Settings), but only when the **server process itself** can reach the local
-model server — fine when you're running the backend on the same laptop your
-phone connects to over Wi-Fi, not usable if you deploy the backend to
-Render/Fly/etc., since `localhost` there means the container, not your
-laptop.
-
-Trade-offs versus DeepInfra/OpenRouter: free and fully private (nothing
-leaves your machine), but you're bounded by your laptop's RAM/GPU — a 14B
+Trade-off to know going in: you're bounded by your laptop's RAM/GPU — a 14B
 model needs roughly 16GB+ RAM to run comfortably and is noticeably less
-capable at following complex multi-step tool-calling instructions than the
-larger cloud-hosted models this project defaults to (drop to 7b if your
-laptop can't spare that much RAM). If it seems to ignore tools or
-loop, try a larger local model first before assuming something's broken.
+capable at following complex multi-step tool-calling instructions than a
+large cloud-hosted model would be (drop to `7b` if your laptop can't spare
+that much RAM, or go up to `32b` if it can spare even more). If it seems to
+ignore tools or loop, try a larger local model before assuming something's
+broken.
 
 ### Prompt style and custom instructions
 
@@ -154,8 +133,9 @@ npm install
 npm run build:core
 npm run build:web      # apps/server serves this build
 cp apps/server/.env.example apps/server/.env
-# fill in DEEPINFRA_KEY / OPENROUTER_KEY and set CJW_AUTH_TOKEN to a
-# long random string — required for anything reachable off your machine
+# set CJW_AUTH_TOKEN to a long random string — required for anything
+# reachable off your machine. Defaults already point at Ollama on
+# localhost:11434; edit CJW_LOCAL_BASE_URL/CJW_DEFAULT_MODEL if needed.
 npm run dev:server     # http://localhost:8787
 ```
 
@@ -172,7 +152,8 @@ Deploy the included `Dockerfile` to any container host. For
 2. In Render: **New → Blueprint**, point it at the repo (`render.yaml` is
    already set up).
 3. Fill in the secrets Render prompts for: `CJW_AUTH_TOKEN` (make up a long
-   random string), `DEEPINFRA_KEY`/`OPENROUTER_KEY`, and optionally
+   random string), `CJW_LOCAL_BASE_URL` pointing at a model server *reachable
+   from Render* (not your laptop — see `render.yaml`'s note), and optionally
    `GITHUB_TOKEN` for PR creation without the `gh` CLI.
 4. Once deployed, open the service's `https://…onrender.com` URL — that's
    both the API and the PWA.
@@ -215,9 +196,9 @@ already keeps for the session.
 The filename itself is generated from the conversation — a short, one-off
 model call summarizes what it's actually about (e.g.
 `fix-oom-memory-leak-2026-09-05T...md`) instead of a generic
-repo-name-plus-timestamp name; if that call fails for any reason (no
-provider key, rate limit), it falls back to the old naming scheme rather
-than breaking the export. On Chromium-based browsers (desktop, Android —
+repo-name-plus-timestamp name; if that call fails for any reason (model
+server unreachable, model not loaded), it falls back to the old naming
+scheme rather than breaking the export. On Chromium-based browsers (desktop, Android —
 not Safari/iOS, which doesn't implement the underlying File System Access
 API), Settings → "Save conversations to" lets you pick a folder once;
 every export after that writes straight there with no dialog, until you
@@ -299,12 +280,14 @@ near that limit).
      right now). A tool-result message is always shrunk in place, never
      removed outright, since every one has to stay paired with its
      assistant message's tool call for the wire format to stay valid.
-  2. **Provider-side prompt caching** on that resent prefix — both
-     DeepInfra and OpenRouter discount repeated input tokens heavily
-     (DeepInfra's cached-input pricing ran roughly 80-92% off standard
-     input for the models checked at the time of writing), and this
-     project's history is append-only with a stable prefix, so it should
-     already benefit without any special handling.
+  2. **Ollama's own prompt caching** on that resent prefix — it caches the
+     KV state of a conversation's stable prefix between requests to the same
+     model, so re-processing the full history each turn is mostly avoided
+     locally too; this project's history is append-only with a stable
+     prefix, so it benefits without any special handling. Cost here is
+     wall-clock inference time on your own hardware rather than a bill, so
+     it matters more (not less) than with a cloud provider — a longer
+     resent history means a slower reply on a laptop-class GPU/CPU.
   3. **Output caps** — `run_shell`/`run_tests` cap combined stdout+stderr at
      100KB by default, keeping the first ~20% and the *last* ~80% of that
      budget rather than a single head-only cut, since a command's actually

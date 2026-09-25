@@ -59,9 +59,9 @@ export interface OpenAICompatibleOptions {
 }
 
 /**
- * Both OpenAI and DeepInfra speak the OpenAI chat-completions wire format
- * (DeepInfra via its /v1/openai compatibility endpoint), so one client
- * implementation covers both — only apiKey/baseURL differ.
+ * Ollama, llama.cpp's llama-server, and LM Studio's local server all speak the OpenAI
+ * chat-completions wire format on their own /v1 endpoint, so one client implementation covers
+ * any of them — only baseURL differs (apiKey is unchecked but still required by the SDK).
  */
 export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): LLMProvider {
   const client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });

@@ -33,7 +33,7 @@ function fakeRegistry(gate: Promise<void>) {
   return { get: () => provider } as unknown as ProviderRegistry;
 }
 
-const config = { provider: "openrouter", model: "fake-model", mcpServers: [] } as unknown as CjwConfig;
+const config = { provider: "local", model: "fake-model", mcpServers: [] } as unknown as CjwConfig;
 
 function newSession(gate: Promise<void> = Promise.resolve()) {
   return new Session("/tmp/cjw-session-test", fakeRegistry(gate), config);

@@ -67,7 +67,6 @@ const confirmApproveBtn = el<HTMLButtonElement>("#confirmApproveBtn");
 const confirmDenyBtn = el<HTMLButtonElement>("#confirmDenyBtn");
 
 const settingsModal = el<HTMLDialogElement>("#settingsModal");
-const providerSelect = el<HTMLSelectElement>("#provider");
 const modelSelect = el<HTMLSelectElement>("#modelSelect");
 const modelHint = el<HTMLParagraphElement>("#modelHint");
 const promptPresetSelect = el<HTMLSelectElement>("#promptPreset");
@@ -526,18 +525,18 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "error": {
-      // A failed list_models request (e.g. the provider's key isn't configured, or its /models
-      // endpoint errored or timed out) rejects with a plain "error" message, same as any other
-      // server-side failure — with no fix, it'd only ever show up as a chat bubble the user might
-      // not even scroll back to, while Settings stayed stuck on "Loading available models…"
-      // forever with no visible explanation right where they were actually looking.
-      if (modelsRequestedFor) {
+      // A failed list_models request (e.g. Ollama isn't running, or its /models endpoint errored
+      // or timed out) rejects with a plain "error" message, same as any other server-side
+      // failure — with no fix, it'd only ever show up as a chat bubble the user might not even
+      // scroll back to, while Settings stayed stuck on "Loading available models…" forever with
+      // no visible explanation right where they were actually looking.
+      if (modelsRequestPending) {
         text(modelHint, `Couldn't load models: ${String(msg.message ?? "unknown error")}`);
-        const current = settings.provider === modelsRequestedFor ? settings.model : "";
+        const current = settings.model;
         modelSelect.innerHTML = current
           ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
           : '<option value="">(no models available)</option>';
-        modelsRequestedFor = null;
+        modelsRequestPending = false;
       }
       addBubble("system", `Error: ${String(msg.message ?? "Unknown error")}`);
       typingIndicator.classList.add("hidden");
@@ -545,11 +544,10 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case "models": {
-      const provider = String((msg as { provider?: string }).provider ?? "");
-      // Ignore a response to a provider the picker has since moved away from.
-      if (provider !== modelsRequestedFor || provider !== providerSelect.value) break;
+      if (!modelsRequestPending) break;
+      modelsRequestPending = false;
       const models = msg.models ?? [];
-      const current = settings.provider === provider ? settings.model : "";
+      const current = settings.model;
       modelSelect.innerHTML = "";
       if (!models.length) {
         const placeholder = document.createElement("option");
@@ -579,9 +577,7 @@ function handleServerMessage(msg: ServerMessage): void {
       }
       text(
         modelHint,
-        models.length
-          ? `${models.length} models available for ${provider}.`
-          : `Couldn't load the model list for ${provider}.`
+        models.length ? `${models.length} models available locally.` : "Couldn't load the local model list."
       );
       break;
     }
@@ -859,10 +855,10 @@ async function importConversation(file: File): Promise<void> {
 }
 
 // --- Settings Modal ---
-let modelsRequestedFor: string | null = null;
+const PROVIDER = "local" as const;
+let modelsRequestPending = false;
 
 function openSettings(): void {
-  providerSelect.value = settings.provider || "openrouter";
   autoApproveCheck.checked = settings.autoApprove ?? false;
   populatePromptPresetSelect();
   customInstructionsInput.value = settings.customInstructions || "";
@@ -936,36 +932,32 @@ function closeSettings(): void {
   settingsModal.close();
 }
 
-/** Fetches the live model catalog for whichever provider is currently selected in the dropdown,
- *  so the model list reflects what that provider actually offers right now (Claude models
- *  included, for OpenRouter) instead of a value someone has to already know and type — this also
- *  keeps a deprecated/renamed model from lingering unnoticed as a hand-typed string. */
+/** Fetches the live model catalog from the local Ollama-compatible server, so the model list
+ *  reflects whatever's actually been `ollama pull`ed right now instead of a value someone has to
+ *  already know and type — this also keeps a since-removed model from lingering unnoticed as a
+ *  hand-typed string. */
 function refreshModels(): void {
   if (!connection) return;
-  const provider = providerSelect.value;
-  modelsRequestedFor = provider;
-  const current = settings.provider === provider ? settings.model : "";
+  modelsRequestPending = true;
+  const current = settings.model;
   modelSelect.innerHTML = current
     ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (current)</option>`
     : '<option value="">Loading…</option>';
   text(modelHint, "Loading available models…");
   show(modelHint);
-  connection.send({ type: "list_models", provider });
+  connection.send({ type: "list_models", provider: PROVIDER });
 }
 
 function saveSettings(): void {
-  const previousProvider = settings.provider;
-  const provider = providerSelect.value as Settings["provider"];
   const model = modelSelect.value || settings.model;
   const autoApprove = autoApproveCheck.checked;
   const promptPreset = promptPresetSelect.value || settings.promptPreset;
   const customInstructions = customInstructionsInput.value;
 
-  persistSettings({ provider, model, autoApprove, promptPreset, customInstructions });
+  persistSettings({ provider: PROVIDER, model, autoApprove, promptPreset, customInstructions });
   settings = loadSettings();
 
   if (connection) {
-    if (provider !== previousProvider) connection.send({ type: "set_provider", provider });
     connection.send({ type: "set_model", model });
     connection.send({ type: "set_auto_approve", value: autoApprove });
     connection.send({ type: "set_prompt_mode", promptPreset, customInstructions });
@@ -1042,7 +1034,6 @@ function init(): void {
   clearExportFolderBtn.addEventListener("click", () => void forgetExportFolder());
   saveSettingsBtn.addEventListener("click", saveSettings);
   closeSettingsBtn.addEventListener("click", closeSettings);
-  providerSelect.addEventListener("change", refreshModels);
   promptPresetSelect.addEventListener("change", updatePromptPresetHint);
   settingsModal.addEventListener("click", (e) => {
     if (e.target === settingsModal) closeSettings();

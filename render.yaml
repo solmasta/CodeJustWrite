@@ -1,6 +1,11 @@
 # Render.com Blueprint — https://render.com/docs/blueprint-spec
 # Deploy: push this repo to GitHub, then in Render click New > Blueprint
 # and point it at the repo. Render reads this file automatically.
+#
+# NOTE: CodeJustWrite talks to a local (Ollama-compatible) model server only — there's no cloud
+# LLM provider. This service can only reach a model at CJW_LOCAL_BASE_URL if one is reachable
+# from wherever it's deployed (e.g. an Ollama instance on the same private network, or one you
+# run in a sibling Render service). It will NOT reach Ollama running on your own laptop.
 services:
   - type: web
     name: codejustwrite-server
@@ -10,18 +15,14 @@ services:
     envVars:
       - key: CJW_AUTH_TOKEN
         sync: false # set to a long random secret in the Render dashboard
-      - key: DEEPINFRA_KEY
-        sync: false
-      - key: OPENROUTER_KEY
-        sync: false
       - key: GITHUB_TOKEN
         sync: false
       - key: CJW_MCP_SERVERS
         sync: false # optional: JSON array of MCP connectors, see README.md
-      - key: CJW_DEFAULT_PROVIDER
-        value: openrouter
+      - key: CJW_LOCAL_BASE_URL
+        sync: false # a model server reachable FROM Render — see the note above
       - key: CJW_DEFAULT_MODEL
-        value: cohere/north-mini-code:free
+        value: qwen2.5-coder:14b
       - key: CJW_SESSION_TTL_MIN
         value: "120"
       - key: CJW_MAX_SESSIONS
