@@ -1,12 +1,11 @@
 import type { McpServerConfig } from "../mcp/types.js";
 
-export type ProviderName = "deepinfra" | "openrouter";
+export type ProviderName = "local";
 
 export interface CjwConfig {
   provider: ProviderName;
   model: string;
-  deepinfraApiKey?: string;
-  openrouterApiKey?: string;
+  localBaseUrl: string;
   githubToken?: string;
   renderApiKey?: string;
   renderServiceId?: string;
@@ -17,19 +16,22 @@ export interface CjwConfig {
 }
 
 const DEFAULT_MODELS: Record<ProviderName, string> = {
-  deepinfra: "moonshotai/Kimi-K3",
-  openrouter: "cohere/north-mini-code:free",
+  // Ollama's own naming; needs `ollama pull qwen2.5-coder:14b` first. Chosen over plain llama3.1
+  // because this agent leans on tool-calling for every turn, and this is one of the strongest
+  // models with reliable tool-call support in Ollama's OpenAI-compatible endpoint.
+  local: "qwen2.5-coder:14b",
 };
 
 export function loadConfig(): CjwConfig {
-  const provider = (process.env.CJW_DEFAULT_PROVIDER as ProviderName) || "openrouter";
-  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openrouter;
+  const provider: ProviderName = "local";
+  const model = process.env.CJW_DEFAULT_MODEL || DEFAULT_MODELS[provider];
 
   return {
     provider,
     model,
-    deepinfraApiKey: process.env.DEEPINFRA_KEY,
-    openrouterApiKey: process.env.OPENROUTER_KEY,
+    // Ollama (and llama.cpp/LM Studio's own OpenAI-compatible servers) ignore the API key
+    // entirely but the OpenAI SDK requires a non-empty string to construct a client.
+    localBaseUrl: process.env.CJW_LOCAL_BASE_URL || "http://localhost:11434/v1",
     githubToken: process.env.GITHUB_TOKEN,
     renderApiKey: process.env.RENDER_API_KEY,
     renderServiceId: process.env.CJW_RENDER_SERVICE_ID,

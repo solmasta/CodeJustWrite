@@ -20,9 +20,8 @@ import {
 const HELP_TEXT = `
 Slash commands:
   /help                Show this help
-  /provider <name>     Switch LLM provider: deepinfra | openrouter
-  /models [filter]     List models available from the current provider (live), e.g. /models claude
-  /model <name>        Switch model for the current provider
+  /models [filter]     List locally-pulled Ollama models (live), e.g. /models coder
+  /model <name>        Switch model
   /mode [preset]        Show or switch prompt style (default | tdd | explain | terse | security)
   /instructions [text]  Set (or, with no text, clear) custom instructions added to every reply
   /mcp                  Show connected MCP servers and their tools
@@ -130,14 +129,6 @@ export async function runRepl(config: CjwConfig): Promise<void> {
       } else if (cmd === "clear") {
         agent.reset();
         log.info("Conversation cleared.");
-      } else if (cmd === "provider") {
-        if (arg !== "deepinfra" && arg !== "openrouter") {
-          log.error("Usage: /provider deepinfra|openrouter");
-        } else {
-          state.provider = arg;
-          state.model = defaultModelFor(arg);
-          log.success(`Switched to ${state.provider}:${state.model}`);
-        }
       } else if (cmd === "models") {
         try {
           const models = await registry.get(state.provider).listModels();

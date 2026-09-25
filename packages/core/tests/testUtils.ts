@@ -6,8 +6,9 @@ import type { CjwConfig } from "../src/config/config.js";
 
 export function makeConfig(overrides: Partial<CjwConfig> = {}): CjwConfig {
   return {
-    provider: "deepinfra",
-    model: "moonshotai/Kimi-K3",
+    provider: "local",
+    model: "qwen2.5-coder:14b",
+    localBaseUrl: "http://localhost:11434/v1",
     shellTimeoutSec: 30,
     mcpServers: [],
     ...overrides,

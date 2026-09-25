@@ -16,7 +16,7 @@ export interface Settings {
   token: string;
   repoUrl: string;
   branch: string;
-  provider: "deepinfra" | "openrouter";
+  provider: "local";
   model: string;
   autoApprove: boolean;
   recentRepos: RepoInfo[];

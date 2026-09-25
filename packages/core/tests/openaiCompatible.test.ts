@@ -30,8 +30,8 @@ describe("createOpenAICompatibleProvider listModels", () => {
 
   beforeAll(async () => {
     // A minimal stand-in for an OpenAI-compatible /models endpoint (what
-    // DeepInfra and OpenRouter both expose) so listModels() is exercised
-    // against a real HTTP response shape without hitting the real network.
+    // Ollama's local server exposes) so listModels() is exercised against a
+    // real HTTP response shape without hitting the real network.
     server = createServer((req, res) => {
       if (req.url === "/models") {
         res.setHeader("content-type", "application/json");

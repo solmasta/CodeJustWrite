@@ -4,8 +4,12 @@ The whole app runs on your phone inside Termux, with no hosting account and no b
 one-time setup, **one tap on a home-screen icon** starts the server and opens the app, already
 signed in.
 
-The AI models still run online (OpenRouter's free models work). Only the server runs on the
-phone, so switching between Wi-Fi and cellular can't break the app's connection to it.
+CodeJustWrite only talks to local (Ollama-compatible) models — a phone can't run a capable coding
+model on its own hardware, so this setup points the phone-hosted server at **Ollama running on a
+laptop on the same Wi-Fi** instead (see the repo's main README for setting that up). Only the
+CodeJustWrite server itself runs on the phone, so switching between Wi-Fi and cellular can't break
+the *app's* connection to it — but the model calls still need that Wi-Fi connection to your
+laptop, so this setup doesn't work away from home the way the old cloud-provider version did.
 
 ---
 
@@ -30,7 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/solmasta/CodeJustWrite/main/scripts
 
 It takes a few minutes. It asks for two things:
 
-- **OpenRouter API key**: get a free one at https://openrouter.ai/keys
+- **Your laptop's local IP address**: so the phone's server can reach Ollama running there (e.g.
+  `192.168.1.42`). Find it in macOS System Settings → Wi-Fi → Details, Windows `ipconfig`, or
+  Linux `ip addr`. Make sure Ollama is running there first (`ollama pull qwen2.5-coder:14b`, then
+  it starts serving on port 11434 automatically) and that both devices are on the same Wi-Fi.
 - **GitHub token**: lets the AI push, open PRs and merge. Create one at
   https://github.com/settings/tokens (press Enter to skip for now)
 

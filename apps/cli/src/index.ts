@@ -12,13 +12,11 @@ const program = new Command();
 program
   .name("cjw")
   .description(
-    "CodeJustWrite — terminal AI coding agent (DeepInfra/OpenRouter) with git, PR automation, and a testing sandbox."
+    "CodeJustWrite — terminal AI coding agent running fully locally (Ollama-compatible) with git, PR automation, and a testing sandbox."
   )
-  .option("--provider <name>", "LLM provider to start with: deepinfra | openrouter")
-  .option("--model <name>", "Model to start with")
-  .action(async (opts: { provider?: string; model?: string }) => {
+  .option("--model <name>", "Model to start with (default: qwen2.5-coder:14b)")
+  .action(async (opts: { model?: string }) => {
     const config = loadConfig();
-    if (opts.provider) config.provider = opts.provider as typeof config.provider;
     if (opts.model) config.model = opts.model;
     await runRepl(config);
   });

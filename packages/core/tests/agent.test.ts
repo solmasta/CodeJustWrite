@@ -35,7 +35,7 @@ class ScriptedProvider implements LLMProvider {
 function makeCtx(): ToolContext {
   return {
     repoRoot: "/tmp",
-    config: { provider: "deepinfra", model: "x", shellTimeoutSec: 30, mcpServers: [] },
+    config: { provider: "local", model: "x", localBaseUrl: "http://localhost:11434/v1", shellTimeoutSec: 30, mcpServers: [] },
     confirm: async () => true,
     log: () => {},
   };
