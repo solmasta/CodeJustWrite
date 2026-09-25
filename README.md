@@ -7,9 +7,11 @@ backed by a **local** model (via [Ollama](https://ollama.com), llama.cpp's
 `llama-server`, or LM Studio) rather than a cloud provider. No API key, and
 nothing leaves your machine.
 
-It ships two ways to use the same agent:
+It ships three ways to use the same agent:
 
 - **`cjw`** — a terminal CLI that operates on your local checkout.
+- **A native desktop app** — a windowed app for your laptop (macOS/Windows/
+  Linux) that starts the backend for you, no terminal required.
 - **A phone-installable PWA** — a chat UI you add to your phone's home
   screen, talking to a small backend that clones a repo per session and runs
   the same agent/tools there.
@@ -20,9 +22,11 @@ It ships two ways to use the same agent:
 packages/core   shared agent: LLM providers, tool-calling loop, git/GitHub/
                 shell/test/browser tools, sandbox — used by both apps below
 apps/cli        the `cjw` terminal CLI
-apps/server     backend for the PWA: auth, per-session repo clone, WebSocket
-                bridge to the agent — also serves the built PWA
+apps/server     backend for the PWA/desktop app: auth, per-session repo
+                clone, WebSocket bridge to the agent — also serves the PWA
 apps/web        the PWA itself (Vite): manifest + service worker + chat UI
+apps/desktop    Electron shell: spawns apps/server locally and opens
+                apps/web in a native window — see "Quick start: desktop app"
 ```
 
 ## Quick start: terminal CLI
@@ -120,6 +124,46 @@ CLI: `/mode` (no argument) lists the presets and shows the current one,
 `/mode tdd` switches; `/instructions <text>` sets custom instructions,
 `/instructions` with nothing clears them. PWA: both live in **Settings (⚙)**
 as a "Prompt style" dropdown and a "Custom instructions" text box.
+
+## Quick start: desktop app
+
+A native window around the same agent — it starts the local backend for you
+and opens straight into the chat UI, already signed in. No terminal, no
+separate `npm run dev:server` step.
+
+```bash
+npm install
+npm run dev:desktop
+```
+
+That's it — `dev:desktop` builds `core`/`server`/`web` and launches the
+Electron window. It spawns the backend on `127.0.0.1` (an open port,
+preferring `8787`), waits for it to come up, and loads the chat UI signed
+in automatically — the same token-in-URL-fragment sign-in the Termux
+one-tap shortcut uses, so there's no login screen.
+
+Settings (Ollama URL/model, GitHub token, MCP servers) live in a small file
+the app creates on first launch — reachable from the app's menu:
+
+- **CodeJustWrite → Open Settings File…** (macOS) or **File → Open Settings
+  File…** (Windows/Linux) opens it in your default text editor
+- **CodeJustWrite/File → Restart Server** applies changes without quitting
+  the app
+- **File → Open Workspaces Folder** shows where each session's repo clone
+  lives; **Help → View Server Logs** for troubleshooting
+
+Building an installable app (`.dmg`/`.exe`/`.AppImage`) instead of running
+from source:
+
+```bash
+npm run package:desktop     # apps/desktop/release/
+```
+
+This bundles the built backend, core, and web UI as `extraResources` via
+[electron-builder](https://www.electron.build/) — build it on the OS you're
+targeting (electron-builder's cross-compilation support is limited, and
+code signing/notarizing for distribution outside your own machine is a
+separate step this project doesn't set up).
 
 ## Quick start: phone PWA
 
@@ -409,13 +453,16 @@ settings).
 ## Development
 
 ```bash
-npm run build        # build core, cli, server, web in order
-npm run typecheck     # tsc --noEmit across core/cli/server
-npm run lint          # eslint across all workspaces
-npm test              # vitest for packages/core (unit tests only; no network/API calls)
-npm run dev:cli        # run the CLI from source via tsx
-npm run dev:server     # run the backend from source via tsx, with reload
-npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
+npm run build          # build core, cli, server, web in order
+npm run build:desktop  # build core/server/web, then the Electron app
+npm run typecheck      # tsc --noEmit across core/cli/server/desktop
+npm run lint           # eslint across all workspaces
+npm test               # vitest across core/server/web/desktop (unit tests only; no network/API calls)
+npm run dev:cli         # run the CLI from source via tsx
+npm run dev:server      # run the backend from source via tsx, with reload
+npm run dev:web         # run the PWA dev server (proxies /api and /ws to :8787)
+npm run dev:desktop     # build then launch the desktop app
+npm run package:desktop # build an installable .dmg/.exe/.AppImage
 ```
 
 ## Safety notes
@@ -432,6 +479,12 @@ npm run dev:web        # run the PWA dev server (proxies /api and /ws to :8787)
 - The PWA backend can run shell commands and push code on your behalf.
   **Always set `CJW_AUTH_TOKEN`** on any deploy reachable from the internet
   — without it, anyone with the URL can use it.
+- The desktop app's backend binds to `127.0.0.1` only and generates a fresh
+  random auth token on every launch, stored nowhere but memory — it's never
+  reachable from another device, so there's no equivalent token to set
+  yourself. Its per-session repo clones live under Electron's own per-OS
+  userData directory (see **File → Open Workspaces Folder**), not the OS
+  temp dir the CLI/PWA backend default to.
 - Each PWA session clones its repo into its own disposable workspace
   (default: OS temp dir, cleaned up when the session ends or goes idle past
   `CJW_SESSION_TTL_MIN`), so sessions don't share state or history.

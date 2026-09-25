@@ -2,7 +2,7 @@
   "name": "codejustwrite-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "CodeJustWrite — terminal AI coding agent with a cloud-hosted, phone-installable PWA front end.",
+  "description": "CodeJustWrite — local AI coding agent with a terminal CLI, a phone-installable PWA, and a native desktop app.",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -13,13 +13,16 @@
     "build:cli": "npm run build --workspace=@codejustwrite/cli",
     "build:server": "npm run build --workspace=@codejustwrite/server",
     "build:web": "npm run build --workspace=@codejustwrite/web",
+    "build:desktop": "npm run build:core && npm run build:server && npm run build:web && npm run build --workspace=@codejustwrite/desktop",
     "dev:cli": "npm run dev --workspace=@codejustwrite/cli",
     "dev:server": "npm run dev --workspace=@codejustwrite/server",
     "dev:web": "npm run dev --workspace=@codejustwrite/web",
+    "dev:desktop": "npm run build:core && npm run build:server && npm run build:web && npm run dev --workspace=@codejustwrite/desktop",
+    "package:desktop": "npm run build:desktop && npm run package --workspace=@codejustwrite/desktop",
     "start": "npm run start --workspace=@codejustwrite/server",
-    "test": "npm run test --workspace=@codejustwrite/core && npm run test --workspace=@codejustwrite/server && npm run test:unit --workspace=@codejustwrite/web",
+    "test": "npm run test --workspace=@codejustwrite/core && npm run test --workspace=@codejustwrite/server && npm run test:unit --workspace=@codejustwrite/web && npm run test --workspace=@codejustwrite/desktop",
     "lint": "eslint apps/*/src packages/*/src",
-    "typecheck": "npm run typecheck --workspace=@codejustwrite/core && npm run typecheck --workspace=@codejustwrite/cli && npm run typecheck --workspace=@codejustwrite/server"
+    "typecheck": "npm run typecheck --workspace=@codejustwrite/core && npm run typecheck --workspace=@codejustwrite/cli && npm run typecheck --workspace=@codejustwrite/server && npm run typecheck --workspace=@codejustwrite/desktop"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.8.1",

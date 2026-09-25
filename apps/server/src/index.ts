@@ -15,7 +15,10 @@ import { listRepos } from "./github.js";
 loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webDist = path.join(__dirname, "..", "..", "web", "dist");
+// The monorepo's own layout (apps/server/dist/../../web/dist = apps/web/dist) by default —
+// overridable because that relative path stops being true once this file is packaged somewhere
+// else (e.g. the desktop app's resourcesPath, which has no sibling "web" two levels up).
+const webDist = process.env.CJW_WEB_DIST || path.join(__dirname, "..", "..", "web", "dist");
 
 const serverConfig = loadServerConfig();
 const agentConfig = loadConfig();
